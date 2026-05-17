@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI-Town 赛博小镇</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <!-- 顶部导航栏 -->
+    <header class="top-bar">
+        <div class="top-bar-left">
+            <h1 class="app-title">🏙 AI-Town 赛博小镇</h1>
+        </div>
+        <div class="top-bar-center">
+            <div class="timeline-selector">
+                <label>时间线:</label>
+                <select id="timelineSelect">
+                    <option value="">加载中...</option>
+                </select>
+            </div>
+            <div class="day-display">
+                📅 第 <span id="currentDay">0</span> 天
+            </div>
+            <button id="advanceDayBtn" class="btn btn-sm" title="推进到下一天">⏩ +1天</button>
+            <button id="godPanelToggle" class="btn btn-sm btn-god">⚡ 上帝界面</button>
+        </div>
+        <div class="top-bar-right">
+            <span id="connectionStatus" class="status-dot offline"></span>
+            <span id="connectionText">连接中...</span>
+        </div>
+    </header>
+
+    <!-- 主容器 -->
+    <div class="main-container">
+        <!-- 左侧 NPC 列表 -->
+        <aside class="npc-sidebar" id="npcSidebar">
+            <div class="sidebar-header">
+                <h2>NPC 列表</h2>
+                <button id="groupChatBtn" class="btn btn-sm">👥 群聊</button>
+            </div>
+            <div class="npc-list" id="npcList">
+                <div class="loading-placeholder">加载中...</div>
+            </div>
+            <div class="sidebar-footer">
+                <div class="status-summary">
+                    <span>🟢 <span id="idleCount">0</span></span>
+                    <span>🟡 <span id="chattingCount">0</span></span>
+                    <span>🔴 <span id="busyCount">0</span></span>
+                    <span>| 均好感: <span id="avgAffinity">0</span></span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- 右侧主聊天区 -->
+        <section class="chat-area" id="chatArea">
+            <!-- 聊天标签页 -->
+            <div class="chat-tabs">
+                <button class="chat-tab active" data-tab="1v1">💬 1v1 聊天</button>
+                <button class="chat-tab" data-tab="group">👥 群聊</button>
+                <button class="chat-tab" data-tab="world">🌍 世界聊天</button>
+            </div>
+
+            <!-- 1v1 聊天面板 -->
+            <div class="chat-panel active" id="panel1v1">
+                <div class="chat-header">
+                    <span id="chatTitle1v1">选择一个 NPC 开始对话</span>
+                </div>
+                <div class="chat-messages" id="messages1v1">
+                    <div class="welcome-message">
+                        <div class="welcome-icon">🏙️</div>
+                        <h2>欢迎来到 AI-Town 赛博小镇</h2>
+                        <p>点击左侧 NPC 开始对话，或选择多个 NPC 进行群聊</p>
+                        <p class="hint">💡 Ctrl+点击多个 NPC 可以发起群聊</p>
+                    </div>
+                </div>
+                <div class="chat-input-area">
+                    <textarea id="input1v1" class="chat-input" placeholder="输入消息... (Enter 发送, Shift+Enter 换行)" rows="2" disabled></textarea>
+                    <button id="sendBtn1v1" class="btn btn-send" disabled>发送</button>
+                </div>
+            </div>
+
+            <!-- 群聊面板 -->
+            <div class="chat-panel" id="panelGroup">
+                <div class="chat-header">
+                    <span id="chatTitleGroup">群聊 - 请选择参与者</span>
+                    <div id="groupMembers" class="group-members"></div>
+                </div>
+                <div class="chat-messages" id="messagesGroup">
+                    <div class="welcome-message">
+                        <p>👥 选择多个 NPC 开始群聊</p>
+                    </div>
+                </div>
+                <div class="chat-input-area">
+                    <textarea id="inputGroup" class="chat-input" placeholder="群聊消息..." rows="2" disabled></textarea>
+                    <button id="sendBtnGroup" class="btn btn-send" disabled>发送</button>
+                </div>
+            </div>
+
+            <!-- 世界聊天面板 -->
+            <div class="chat-panel" id="panelWorld">
+                <div class="chat-header">
+                    <span>🌍 NPC 世界聊天</span>
+                    <button id="triggerNPCChatBtn" class="btn btn-sm">🎲 手动触发</button>
+                </div>
+                <div class="chat-messages" id="messagesWorld">
+                    <div class="welcome-message">
+                        <p>🌍 这里显示 NPC 之间的自动对话</p>
+                        <p class="hint">NPC 间好感度达到 60 且双方空闲时，有概率自动触发对话</p>
+                    </div>
+                </div>
+                <div class="chat-input-area world-stats" id="worldStats">
+                    <span>📊 今日剩余: <span id="dailyCallsLeft">50</span> 次</span>
+                    <span id="cooldownsText"></span>
+                </div>
+            </div>
+        </section>
+
+        <!-- 上帝界面抽屉 -->
+        <aside class="god-panel" id="godPanel">
+            <div class="god-panel-header">
+                <h2>⚡ 上帝界面</h2>
+                <button id="godPanelClose" class="btn btn-sm">✕</button>
+            </div>
+
+            <div class="god-section">
+                <h3>时间线管理</h3>
+                <div class="timeline-list" id="godTimelineList">
+                    <table class="timeline-table">
+                        <thead>
+                            <tr><th>名称</th><th>天数</th><th>事件</th><th>操作</th></tr>
+                        </thead>
+                        <tbody id="godTimelineTableBody"></tbody>
+                    </table>
+                </div>
+                <div class="god-create-timeline">
+                    <input type="text" id="newTimelineName" placeholder="新时间线名称..." maxlength="50">
+                    <button id="createTimelineBtn" class="btn btn-sm">+ 创建</button>
+                </div>
+            </div>
+
+            <div class="god-section">
+                <h3>📝 今日事件</h3>
+                <p class="god-hint">每天只能编写一个事件，只能覆盖不能删除</p>
+                <textarea id="todayEventInput" class="event-textarea" placeholder="编写今天发生的事件... (最多200字)" maxlength="200" rows="4"></textarea>
+                <div class="event-char-count"><span id="eventCharCount">0</span>/200</div>
+                <button id="saveEventBtn" class="btn btn-primary">💾 覆盖保存</button>
+                <p class="god-hint" id="eventUpdateInfo"></p>
+            </div>
+
+            <div class="god-section">
+                <h3>📜 历史事件 <span class="readonly-tag">只读</span></h3>
+                <div class="event-history" id="eventHistory">
+                    <p class="god-hint">暂无事件记录</p>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <!-- 推进确认对话框 -->
+    <div class="modal-overlay" id="advanceModal" style="display:none;">
+        <div class="modal">
+            <h3>⚡ 推进时间线</h3>
+            <p>确定要推进到第 <strong id="advanceTargetDay">N</strong> 天吗？</p>
+            <p class="modal-warning">⚠️ 此操作不可撤销，过去的天数无法再修改</p>
+            <div class="modal-buttons">
+                <button id="advanceCancel" class="btn">取消</button>
+                <button id="advanceConfirm" class="btn btn-primary">确定推进</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- NPC 间聊天触发选择对话框 -->
+    <div class="modal-overlay" id="triggerChatModal" style="display:none;">
+        <div class="modal">
+            <h3>🎲 手动触发 NPC 对话</h3>
+            <p>选择两个 NPC 来触发对话：</p>
+            <div class="npc-select-row">
+                <select id="triggerNpcA"></select>
+                <span>↔</span>
+                <select id="triggerNpcB"></select>
+            </div>
+            <div class="modal-buttons">
+                <button id="triggerChatCancel" class="btn">取消</button>
+                <button id="triggerChatConfirm" class="btn btn-primary">触发</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/state.js"></script>
+    <script src="js/api.js"></script>
+    <script src="js/app.js"></script>
+    <script src="js/god.js"></script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+# 本地开发环境配置
+# 使用方式: docker compose -f docker-compose.yml -f docker-compose.local.yml up
+# 或在 .env 中设置:
+#   QDRANT_URL=http://qdrant-local:6333
+#   QDRANT_API_KEY=
+#   NEO4J_URI=bolt://neo4j-local:7687
+#   NEO4J_USERNAME=neo4j
+#   NEO4J_PASSWORD=hello-agents-password
+
+services:
+  # 激活本地服务
+  qdrant-local:
+    profiles: []  # 移除 profiles 限制，使其默认启动
+
+  neo4j-local:
+    profiles: []  # 移除 profiles 限制，使其默认启动
+
+  # Backend 等待本地服务就绪
+  backend:
+    depends_on:
+      qdrant-local:
+        condition: service_started
+      neo4j-local:
+        condition: service_healthy

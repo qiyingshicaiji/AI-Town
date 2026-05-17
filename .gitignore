@@ -1,0 +1,45 @@
+# ================================
+# AI-Town .gitignore
+# ================================
+
+# 敏感配置 (包含真实密钥)
+.env.local
+.env
+backend/.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+
+# Timeline data backups
+backend/timeline_data/*.bak
+backend/timeline_data/*.tmp
+
+# Logs
+backend/logs/*.log
+
+# SQLite databases
+*.db
+*.sqlite3
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml
