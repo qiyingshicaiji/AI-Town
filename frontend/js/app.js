@@ -1,533 +1,549 @@
 /* ================================
-   Main Application - 聊天主逻辑
+   Main Application - 微信式对话列表
    ================================ */
 
-// ==================== DOM Refs ====================
-
-const npcList = document.getElementById('npcList');
-const groupChatBtn = document.getElementById('groupChatBtn');
-const chatTabs = document.querySelectorAll('.chat-tab');
-
-// 1v1
-const messages1v1 = document.getElementById('messages1v1');
-const input1v1 = document.getElementById('input1v1');
-const sendBtn1v1 = document.getElementById('sendBtn1v1');
-const chatTitle1v1 = document.getElementById('chatTitle1v1');
-
-// Group
-const messagesGroup = document.getElementById('messagesGroup');
-const inputGroup = document.getElementById('inputGroup');
-const sendBtnGroup = document.getElementById('sendBtnGroup');
-const chatTitleGroup = document.getElementById('chatTitleGroup');
-const groupMembers = document.getElementById('groupMembers');
-
-// World
-const messagesWorld = document.getElementById('messagesWorld');
-const triggerNpcChatBtn = document.getElementById('triggerNPCChatBtn');
-const dailyCallsLeft = document.getElementById('dailyCallsLeft');
-const cooldownsText = document.getElementById('cooldownsText');
-
-// Connection
+// DOM Refs
+const convList = document.getElementById('convList');
+const convSearch = document.getElementById('convSearch');
+const chatTitle = document.getElementById('chatTitle');
+const chatSubtitle = document.getElementById('chatSubtitle');
+const chatMessages = document.getElementById('chatMessages');
+const chatInput = document.getElementById('chatInput');
+const sendBtn = document.getElementById('sendBtn');
+const chatHeaderActions = document.getElementById('chatHeaderActions');
+const newGroupChatBtn = document.getElementById('newGroupChatBtn');
+const newGroupModal = document.getElementById('newGroupModal');
+const groupNpcCheckboxes = document.getElementById('groupNpcCheckboxes');
+const newGroupConfirm = document.getElementById('newGroupConfirm');
+const newGroupCancel = document.getElementById('newGroupCancel');
 const connectionStatus = document.getElementById('connectionStatus');
 const connectionText = document.getElementById('connectionText');
-
-// Summary
 const idleCountEl = document.getElementById('idleCount');
 const chattingCountEl = document.getElementById('chattingCount');
 const busyCountEl = document.getElementById('busyCount');
 const avgAffinityEl = document.getElementById('avgAffinity');
 
-// Trigger modal
-const triggerChatModal = document.getElementById('triggerChatModal');
-const triggerNpcA = document.getElementById('triggerNpcA');
-const triggerNpcB = document.getElementById('triggerNpcB');
-const triggerChatConfirm = document.getElementById('triggerChatConfirm');
-const triggerChatCancel = document.getElementById('triggerChatCancel');
+// State
+let currentConvId = null;
+let currentConv = null;
+let allNpcs = [];
+let pollingTimer = null;
 
 // ==================== Initialization ====================
 
 document.addEventListener('DOMContentLoaded', async () => {
-    // Restore saved state
-    const savedTL = localStorage.getItem('activeTimelineId');
-    if (savedTL) STATE.activeTimelineId = savedTL;
-
-    // Setup event listeners
-    setupChatTabs();
-    setupInputHandlers();
-    setupGroupChat();
-    setupTriggerChatModal();
-
-    // Initial load
+    setupEventListeners();
     await refreshAllTimelineData();
-    await fetchAndRenderNpcs();
-    await refreshGodPanel();
+    await loadNpcsAndInit();
 
-    // Start polling
-    startPolling();
+    renderConvList();
 
-    // Set connected
     setConnectionStatus(true);
-
-    console.log('🏙 AI-Town 前端已就绪');
+    startPolling();
+    console.log('🏙 AI-Town v2 已就绪');
 });
 
-// ==================== Chat Tabs ====================
-
-function setupChatTabs() {
-    chatTabs.forEach(tab => {
-        tab.addEventListener('click', () => {
-            chatTabs.forEach(t => t.classList.remove('active'));
-            tab.classList.add('active');
-            const mode = tab.dataset.tab;
-            STATE.chatMode = mode;
-            document.querySelectorAll('.chat-panel').forEach(p => p.classList.remove('active'));
-            document.getElementById(`panel${mode === '1v1' ? '1v1' : mode === 'group' ? 'Group' : 'World'}`).classList.add('active');
-
-            if (mode === 'world') {
-                refreshWorldChat();
-            }
-        });
+function setupEventListeners() {
+    // Send message
+    chatInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
     });
-}
+    sendBtn.addEventListener('click', sendMessage);
 
-// ==================== Input Handlers ====================
+    // Conversation search
+    convSearch.addEventListener('input', renderConvList);
 
-function setupInputHandlers() {
-    // 1v1 input
-    input1v1.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            send1v1Message();
-        }
-    });
-    sendBtn1v1.addEventListener('click', send1v1Message);
+    // New group chat
+    newGroupChatBtn.addEventListener('click', openNewGroupModal);
+    newGroupCancel.addEventListener('click', () => newGroupModal.style.display = 'none');
+    newGroupConfirm.addEventListener('click', createGroupChat);
 
-    // Group input
-    inputGroup.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            sendGroupMessage();
-        }
-    });
-    sendBtnGroup.addEventListener('click', sendGroupMessage);
-}
-
-async function send1v1Message() {
-    const text = input1v1.value.trim();
-    if (!text || !STATE.active1v1Npc) return;
-
-    input1v1.value = '';
-    STATE.lastActivity = Date.now();
-
-    // Show player message
-    appendMessage('1v1', 'player', text, new Date().toISOString());
-    input1v1.disabled = true;
-    sendBtn1v1.disabled = true;
-
-    try {
-        const data = await sendChat(STATE.active1v1Npc, text);
-        appendMessage('1v1', STATE.active1v1Npc, data.message, data.timestamp || new Date().toISOString());
-        // Refresh NPC list for affinity changes
-        await fetchAndRenderNpcs();
-    } catch (e) {
-        appendMessage('1v1', 'system', `❌ 发送失败: ${e.message}`);
-    } finally {
-        input1v1.disabled = false;
-        sendBtn1v1.disabled = false;
-        input1v1.focus();
-    }
-}
-
-async function sendGroupMessage() {
-    const text = inputGroup.value.trim();
-    if (!text || STATE.selectedGroupNpcs.length === 0) return;
-
-    inputGroup.value = '';
-    STATE.lastActivity = Date.now();
-
-    // Show player message
-    appendMessage('group', 'player', text, new Date().toISOString());
-
-    inputGroup.disabled = true;
-    sendBtnGroup.disabled = true;
-
-    try {
-        const data = await sendGroupChat(STATE.selectedGroupNpcs, text);
-        for (const [name, resp] of Object.entries(data.responses)) {
-            appendMessage('group', name, resp.message, resp.timestamp || new Date().toISOString());
-        }
-        if (data.failed.length > 0) {
-            appendMessage('group', 'system', `⚠️ ${data.failed.join(', ')} 回复失败`);
-        }
-        await fetchAndRenderNpcs();
-    } catch (e) {
-        appendMessage('group', 'system', `❌ 群聊失败: ${e.message}`);
-    } finally {
-        inputGroup.disabled = false;
-        sendBtnGroup.disabled = false;
-        inputGroup.focus();
-    }
-}
-
-// ==================== Group Chat Management ====================
-
-function setupGroupChat() {
-    groupChatBtn.addEventListener('click', () => {
-        if (STATE.selectedGroupNpcs.length === 0) {
-            // Toggle group mode
-            STATE.chatMode = 'group';
-            document.querySelectorAll('.chat-panel').forEach(p => p.classList.remove('active'));
-            document.getElementById('panelGroup').classList.add('active');
-            chatTabs.forEach(t => t.classList.remove('active'));
-            document.querySelector('[data-tab="group"]').classList.add('active');
-        } else {
-            // Clear group selection
-            STATE.selectedGroupNpcs = [];
-            updateGroupUI();
-            renderNpcCards();
-        }
-    });
-}
-
-function toggleGroupNpc(npcName) {
-    const idx = STATE.selectedGroupNpcs.indexOf(npcName);
-    if (idx >= 0) {
-        STATE.selectedGroupNpcs.splice(idx, 1);
-    } else {
-        if (STATE.selectedGroupNpcs.length >= 5) {
-            alert('群聊最多 5 个 NPC');
-            return;
-        }
-        STATE.selectedGroupNpcs.push(npcName);
-    }
-    updateGroupUI();
-    renderNpcCards();
-
-    if (STATE.selectedGroupNpcs.length > 0) {
-        STATE.chatMode = 'group';
-        document.querySelectorAll('.chat-panel').forEach(p => p.classList.remove('active'));
-        document.getElementById('panelGroup').classList.add('active');
-        chatTabs.forEach(t => t.classList.remove('active'));
-        document.querySelector('[data-tab="group"]').classList.add('active');
-    }
-}
-
-function updateGroupUI() {
-    groupMembers.innerHTML = STATE.selectedGroupNpcs.map(name =>
-        `<span class="group-member-tag" onclick="toggleGroupNpc('${name}')">${name}</span>`
-    ).join('');
-    chatTitleGroup.textContent = STATE.selectedGroupNpcs.length > 0
-        ? `群聊 (${STATE.selectedGroupNpcs.join(', ')})`
-        : '群聊 - 请选择参与者';
-    inputGroup.disabled = STATE.selectedGroupNpcs.length === 0;
-    sendBtnGroup.disabled = STATE.selectedGroupNpcs.length === 0;
-}
-
-// ==================== NPC Cards ====================
-
-async function fetchAndRenderNpcs() {
-    try {
-        const [npcsData, statesData] = await Promise.all([
-            fetchNpcList(),
-            fetchNpcStates()
-        ]);
-
-        const npcs = npcsData.npcs.map(npc => {
-            const state = statesData.states.find(s => s.name === npc.name);
-            return {
-                ...npc,
-                state: state ? state.state : 'idle',
-                affinity: 50,  // Will be updated below
-                level: '友好'
-            };
-        });
-
-        // Fetch affinities in parallel
-        const affinityPromises = npcs.map(npc =>
-            fetchNpcAffinity(npc.name).then(data => ({
-                name: npc.name,
-                affinity: data.affinity || 50,
-                level: data.level || '友好'
-            })).catch(() => ({ name: npc.name, affinity: 50, level: '友好' }))
-        );
-        const affinities = await Promise.all(affinityPromises);
-
-        for (const aff of affinities) {
-            const npc = npcs.find(n => n.name === aff.name);
-            if (npc) {
-                npc.affinity = aff.affinity;
-                npc.level = aff.level;
+    // Escape to close modals
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            newGroupModal.style.display = 'none';
+            if (!godPanel.classList.contains('collapsed')) {
+                godPanel.classList.add('collapsed');
+                godPanelToggle.textContent = '⚡ 上帝界面';
             }
         }
+    });
+}
 
-        // Update state
-        STATE.npcs = npcs;
-        STATE.npcStates = statesData.states;
-        if (statesData.current_day) {
-            setState('currentDay', statesData.current_day);
-            currentDaySpan.textContent = statesData.current_day;
-        }
-        if (statesData.active_timeline) {
-            setState('activeTimelineId', statesData.active_timeline);
-        }
+// ==================== NPC Loading ====================
 
-        renderNpcCards();
-        updateSummary();
+async function loadNpcsAndInit() {
+    try {
+        const [npcsData, statesData] = await Promise.all([fetchNpcList(), fetchNpcStates()]);
+        allNpcs = npcsData.npcs.map(npc => {
+            const st = statesData.states.find(s => s.name === npc.name);
+            return { ...npc, state: st ? st.state : 'idle', affinity: 50, level: '友好' };
+        });
 
+        // Fetch affinities
+        const results = await Promise.all(allNpcs.map(n => fetchNpcAffinity(n.name).catch(() => ({ affinity: 50 }))));
+        results.forEach((r, i) => { allNpcs[i].affinity = r.affinity || 50; allNpcs[i].level = r.level || '友好'; });
+
+        // Init default conversations
+        initDefaultConversations(allNpcs.map(n => n.name));
+        updateStatusSummary();
     } catch (e) {
-        console.error('Failed to fetch NPCs:', e);
+        console.error('NPC load failed:', e);
         setConnectionStatus(false);
-        npcList.innerHTML = `
-            <div class="loading-placeholder" style="color:#e74c3c">
-                <p>❌ 无法连接到后端</p>
-                <p style="font-size:12px;color:#888">${escapeHtml(e.message || '网络错误')}</p>
-                <p style="font-size:12px;color:#888">后端地址: ${API_BASE}</p>
-                <button class="btn btn-sm" onclick="retryLoadNpcs()" style="margin-top:10px">🔄 重试</button>
-            </div>`;
+        convList.innerHTML = `<div class="loading-placeholder" style="color:#e74c3c">
+            <p>❌ 无法连接后端</p><p style="font-size:12px">${escapeHtml(e.message)}</p>
+            <button class="btn btn-sm" onclick="location.reload()">🔄 重试</button></div>`;
     }
 }
 
-function renderNpcCards() {
-    if (STATE.npcs.length === 0) {
-        npcList.innerHTML = '<div class="loading-placeholder">暂无NPC数据</div>';
+// ==================== Conversation List Rendering ====================
+
+function renderConvList() {
+    const list = getConversationList();
+    const query = (convSearch.value || '').toLowerCase();
+
+    const filtered = query ? list.filter(c =>
+        c.name.toLowerCase().includes(query) ||
+        (c.participants || []).some(p => p.toLowerCase().includes(query))
+    ) : list;
+
+    if (filtered.length === 0) {
+        convList.innerHTML = '<div class="loading-placeholder">暂无对话</div>';
         return;
     }
 
-    npcList.innerHTML = STATE.npcs.map(npc => {
-        const isSelected = STATE.active1v1Npc === npc.name;
-        const isGrouped = STATE.selectedGroupNpcs.includes(npc.name);
-        const avatarClass = npc.name === '张三' ? 'zhang' : npc.name === '李四' ? 'li' : 'wang';
-        const stateClass = npc.state;
-        const affPct = Math.round(npc.affinity);
-        const affColor = affPct >= 60 ? '#4caf50' : affPct >= 40 ? '#ff9800' : '#f44336';
-
-        let cardClass = 'npc-card';
-        if (isSelected) cardClass += ' selected';
-        if (isGrouped) cardClass += ' group-selected';
-        if (npc.state === 'chatting') cardClass += ' chatting';
-        if (npc.state === 'busy') cardClass += ' busy';
+    convList.innerHTML = filtered.map(c => {
+        const avatarClass = getAvatarClass(c);
+        const avatarText = getAvatarText(c);
+        const timeStr = c.lastTime ? formatTimeStr(c.lastTime) : '';
+        const hasUnread = (c.unread || 0) > 0;
 
         return `
-        <div class="${cardClass}" onclick="selectNpc('${npc.name}')" data-npc="${npc.name}">
-            <span class="npc-state-indicator"><span class="state-light ${stateClass}" title="${stateClass}"></span></span>
-            <div class="npc-card-header">
-                <div class="npc-avatar ${avatarClass}">${npc.name[0]}</div>
-                <div class="npc-info">
-                    <div class="npc-name">${npc.name}</div>
-                    <div class="npc-title">${npc.title}</div>
-                </div>
+        <div class="conv-item ${c.id === currentConvId ? 'active' : ''}" onclick="openConversation('${c.id}')" data-convid="${c.id}">
+            <div class="conv-avatar ${avatarClass}">${avatarText}</div>
+            <div class="conv-info">
+                <div class="conv-name">${escapeHtml(c.name)}</div>
+                <div class="conv-preview">${escapeHtml(c.lastMsg || '点击开始对话')}</div>
             </div>
-            <div class="affinity-bar">
-                <div class="affinity-fill" style="width:${affPct}%; background:${affColor}"></div>
+            <div class="conv-meta">
+                <div class="conv-time">${timeStr}</div>
+                ${hasUnread ? `<span class="conv-unread">${c.unread}</span>` : ''}
             </div>
-            <div class="affinity-label">好感: ${affPct} (${npc.level})</div>
         </div>`;
     }).join('');
-
-    // Restore scroll position
 }
 
-function updateSummary() {
-    const states = STATE.npcs.map(n => n.state);
-    idleCountEl.textContent = states.filter(s => s === 'idle').length;
-    chattingCountEl.textContent = states.filter(s => s === 'chatting').length;
-    busyCountEl.textContent = states.filter(s => s === 'busy').length;
-    const avg = STATE.npcs.reduce((sum, n) => sum + n.affinity, 0) / (STATE.npcs.length || 1);
-    avgAffinityEl.textContent = Math.round(avg);
+function getAvatarClass(conv) {
+    if (conv.type === 'group') return 'group';
+    if (conv.type === 'npcnpc') return 'npcnpc';
+    if (conv.name === '张三') return 'npc-zhang';
+    if (conv.name === '李四') return 'npc-li';
+    if (conv.name === '王五') return 'npc-wang';
+    return 'npc-zhang';
 }
 
-// ==================== NPC Selection ====================
+function getAvatarText(conv) {
+    if (conv.type === 'group') return '👥';
+    if (conv.type === 'npcnpc') return '💬';
+    return (conv.name || '?')[0];
+}
 
-function selectNpc(npcName) {
-    if (STATE.chatMode === 'group' || STATE.selectedGroupNpcs.length > 0) {
-        toggleGroupNpc(npcName);
+function updateConversationPreview(convId, msg) {
+    const conv = getConversation(convId);
+    if (conv) {
+        conv.lastMsg = (msg.content || '').substring(0, 40);
+        conv.lastTime = msg.time || new Date().toISOString();
+        conv.unread = convId === currentConvId ? 0 : (conv.unread || 0) + 1;
+        upsertConversation(conv);
+    }
+}
+
+// ==================== Open Conversation ====================
+
+async function openConversation(convId) {
+    // Save current messages first
+    if (currentConvId && currentConv) {
+        saveMessages(currentConvId, getCurrentMessages());
+    }
+
+    currentConvId = convId;
+    currentConv = getConversation(convId);
+    if (!currentConv) return;
+
+    markRead(convId);
+    renderConvList();
+
+    // Update chat header
+    chatTitle.textContent = currentConv.name;
+    if (currentConv.type === 'group') {
+        chatSubtitle.textContent = '群聊 · ' + (currentConv.participants || []).join(', ');
+    } else if (currentConv.type === 'npcnpc') {
+        chatSubtitle.textContent = 'NPC 间对话 · ' + (currentConv.participants || []).join(' ↔ ');
+    } else {
+        const npc = allNpcs.find(n => n.name === currentConv.name);
+        chatSubtitle.textContent = npc ? `${npc.title} · 好感度: ${Math.round(npc.affinity)}` : '';
+    }
+
+    // Header actions
+    if (currentConv.type === 'group') {
+        chatHeaderActions.innerHTML = `
+            <button class="btn btn-sm" onclick="startContention()" title="NPC自动抢话">🎲 开始抢话</button>
+            <button class="btn btn-sm" onclick="deleteConversation('${convId}')">🗑</button>`;
+    } else if (currentConv.type === 'npcnpc') {
+        chatHeaderActions.innerHTML = `
+            <button class="btn btn-sm" onclick="deleteConversation('${convId}')">🗑</button>`;
+    } else {
+        chatHeaderActions.innerHTML = '';
+    }
+
+    // Load messages
+    const msgs = loadMessages(convId);
+    renderMessages(msgs);
+
+    chatInput.disabled = currentConv.type === 'npcnpc';
+    sendBtn.disabled = currentConv.type === 'npcnpc';
+    if (currentConv.type !== 'npcnpc') chatInput.focus();
+}
+
+function getCurrentMessages() {
+    const container = chatMessages;
+    const rows = container.querySelectorAll('.message-row, .message-time');
+    const msgs = [];
+    rows.forEach(row => {
+        if (row.classList.contains('message-time')) {
+            msgs.push({ type: 'system', content: row.textContent, time: new Date().toISOString() });
+        } else {
+            const bubble = row.querySelector('.message-bubble');
+            const senderEl = row.querySelector('.message-sender');
+            if (bubble) {
+                msgs.push({
+                    sender: senderEl ? senderEl.textContent : (row.classList.contains('self') ? 'player' : ''),
+                    content: bubble.textContent,
+                    time: new Date().toISOString()
+                });
+            }
+        }
+    });
+    return msgs;
+}
+
+function renderMessages(msgs) {
+    chatMessages.innerHTML = '';
+    if (!msgs || msgs.length === 0) {
+        chatMessages.innerHTML = `
+        <div class="welcome-message">
+            <div class="welcome-icon">💬</div>
+            <p>${currentConv ? '和 ' + currentConv.name + ' 开始对话吧' : '选择一个对话开始'}</p>
+        </div>`;
         return;
     }
 
-    STATE.active1v1Npc = npcName;
-    STATE.chatMode = '1v1';
+    msgs.forEach(msg => {
+        if (msg.type === 'system') {
+            chatMessages.innerHTML += `<div class="message-time">${escapeHtml(msg.content)}</div>`;
+        } else {
+            const isPlayer = msg.sender === 'player';
+            const name = msg.sender || 'unknown';
+            const initial = isPlayer ? '我' : (name[0] || '?');
+            const avatarClass = isPlayer ? 'player' : (name === '张三' ? 'npc-zhang' : name === '李四' ? 'npc-li' : 'npc-wang');
+            const rowClass = isPlayer ? 'self' : 'other';
 
-    // Switch to 1v1 tab
-    document.querySelectorAll('.chat-panel').forEach(p => p.classList.remove('active'));
-    document.getElementById('panel1v1').classList.add('active');
-    chatTabs.forEach(t => t.classList.remove('active'));
-    document.querySelector('[data-tab="1v1"]').classList.add('active');
+            chatMessages.innerHTML += `
+            <div class="message-row ${rowClass}">
+                <div class="message-avatar ${avatarClass}">${initial}</div>
+                <div class="message-body">
+                    ${!isPlayer ? `<span class="message-sender">${escapeHtml(name)}</span>` : ''}
+                    <div class="message-bubble">${escapeHtml(msg.content)}</div>
+                </div>
+            </div>`;
+        }
+    });
 
-    // Update UI
-    const npc = STATE.npcs.find(n => n.name === npcName);
-    chatTitle1v1.textContent = npc ? `${npc.name} (${npc.title}) · 好感度: ${Math.round(npc.affinity)}` : npcName;
-    input1v1.disabled = false;
-    sendBtn1v1.disabled = false;
-    input1v1.focus();
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
 
-    // Clear previous messages for this NPC (keep minimal history)
-    messages1v1.innerHTML = `
-        <div class="welcome-message">
-            <div class="welcome-icon">💬</div>
-            <p>正在与 <strong>${npcName}</strong> 对话</p>
-            ${npc ? `<p class="hint">好感度: ${Math.round(npc.affinity)} (${npc.level}) | 状态: ${npc.state}</p>` : ''}
-        </div>`;
+// ==================== Send Message ====================
 
-    renderNpcCards();
+async function sendMessage() {
+    const text = chatInput.value.trim();
+    if (!text || !currentConvId || !currentConv) return;
+
+    chatInput.value = '';
     STATE.lastActivity = Date.now();
+
+    const playerMsg = { sender: 'player', content: text, time: new Date().toISOString() };
+    appendMessage(currentConvId, playerMsg);
+    renderMessages(loadMessages(currentConvId));
+    updateConversationPreview(currentConvId, playerMsg);
+    renderConvList();
+
+    chatInput.disabled = true;
+    sendBtn.disabled = true;
+
+    // 统一使用场景生成端点（SSE 流式）
+    streamScene(currentConv, text);
+
+    chatInput.disabled = (currentConv && currentConv.type === 'npcnpc');
+    sendBtn.disabled = (currentConv && currentConv.type === 'npcnpc');
+    chatInput.focus();
 }
 
-// ==================== Message Rendering ====================
+// ==================== Group Chat ====================
 
-function appendMessage(panel, sender, content, timestamp) {
-    const isPlayer = sender === 'player';
-    const isSystem = sender === 'system';
-    const panelId = panel === '1v1' ? 'messages1v1' : panel === 'group' ? 'messagesGroup' : 'messagesWorld';
-    const container = document.getElementById(panelId);
-
-    if (isSystem) {
-        container.innerHTML += `<div class="message-time">${content}</div>`;
-    } else {
-        const avatarClass = isPlayer ? 'player' : (sender === '张三' ? 'zhang' : sender === '李四' ? 'li' : 'wang');
-        const initial = isPlayer ? '我' : sender[0];
-        const rowClass = isPlayer ? 'self' : `other ${sender === '张三' ? 'npc-zhang' : sender === '李四' ? 'npc-李四' : 'npc-王五'}`;
-
-        const timeStr = formatTime(timestamp);
-        container.innerHTML += `
-        <div class="message-row ${rowClass}">
-            <div class="message-avatar ${avatarClass}">${initial}</div>
-            <div class="message-body">
-                ${!isPlayer ? `<span class="message-sender">${sender}</span>` : ''}
-                <div class="message-bubble">${escapeHtml(content)}</div>
-                <span style="font-size:10px; color:#aaa; ${isPlayer ? 'text-align:right' : ''}">${timeStr}</span>
-            </div>
-        </div>`;
-    }
-
-    // Scroll to bottom
-    container.scrollTop = container.scrollHeight;
+function openNewGroupModal() {
+    groupNpcCheckboxes.innerHTML = allNpcs.map(n => `
+        <label class="checkbox-label">
+            <input type="checkbox" value="${n.name}"> ${n.name} (${n.title})
+        </label>
+    `).join('');
+    newGroupModal.style.display = 'flex';
 }
 
-function appendWorldMessage(sender, content, npcPair = '') {
-    const container = messagesWorld;
-    let html = '';
-    if (sender === 'system') {
-        html = `<div class="message-time">${content}</div>`;
-    } else {
-        html = `
-        <div class="world-message">
-            <div class="wm-speakers">💬 ${npcPair || sender}</div>
-            <div>${escapeHtml(content)}</div>
-        </div>`;
-    }
-    container.innerHTML += html;
-    container.scrollTop = container.scrollHeight;
+async function createGroupChat() {
+    const checks = groupNpcCheckboxes.querySelectorAll('input:checked');
+    const names = Array.from(checks).map(c => c.value);
+    if (names.length < 2) { alert('请至少选择 2 个 NPC'); return; }
+
+    newGroupModal.style.display = 'none';
+    const convId = makeGroupConvId();
+    const conv = {
+        id: convId, type: 'group',
+        name: '群聊 (' + names.join(', ') + ')',
+        participants: names,
+        lastMsg: '', lastTime: new Date().toISOString(), unread: 0
+    };
+    upsertConversation(conv);
+    renderConvList();
+    openConversation(convId);
+
+    // Auto-start contention
+    setTimeout(() => startContention(), 500);
 }
 
-// ==================== World Chat ====================
+let abortContention = null;
 
-async function refreshWorldChat() {
+async function streamScene(conv, userMessage) {
+    // 中止当前的流
+    if (abortContention) { abortContention.abort(); abortContention = null; }
+
+    const npcNames = conv.type === 'group' ? conv.participants : [conv.name];
+    const history = loadMessages(conv.id).slice(-8);  // 最近 8 条作为上下文
+
+    abortContention = new AbortController();
+
     try {
-        const status = await fetchNpcNpcChatStatus();
-        STATE.npcChatStatus = status;
-        STATE.dailyCallsLeft = 50; // default
+        const resp = await fetch(API_BASE + '/chat/scene', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                npc_names: npcNames,
+                message: userMessage || '',
+                conversation_id: conv.id,
+                history: history
+            }),
+            signal: abortContention.signal
+        });
 
-        // Update stats
-        if (status.cooldowns) {
-            const cdEntries = Object.entries(status.cooldowns);
-            cooldownsText.textContent = cdEntries.length > 0
-                ? `冷却: ${cdEntries.map(([k, v]) => `${k}(${v}s)`).join(', ')}`
-                : '';
-        }
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
 
-        // Show active chats
-        for (const chat of status.active_chats || []) {
-            for (const msg of chat.messages || []) {
-                appendWorldMessage(msg.speaker, msg.content, `${chat.npc_a} ↔ ${chat.npc_b}`);
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                try {
+                    const msg = JSON.parse(line.slice(6));
+                    if (msg.type === 'done') return;
+                    if (msg.speaker && msg.content) {
+                        const stored = { sender: msg.speaker, content: msg.content, time: new Date().toISOString() };
+                        appendMessage(conv.id, stored);
+                        updateConversationPreview(conv.id, stored);
+                        renderMessages(loadMessages(conv.id));
+                        renderConvList();
+                    }
+                } catch (e) { /* skip parse errors */ }
             }
         }
-
-        // Show recent history that wasn't shown yet
-        if (status.history && status.history.length > 0) {
-            const lastChat = status.history[status.history.length - 1];
-            if (!messagesWorld.dataset.lastChatId || messagesWorld.dataset.lastChatId !== lastChat.id) {
-                messagesWorld.dataset.lastChatId = lastChat.id;
-                for (const msg of lastChat.messages || []) {
-                    appendWorldMessage(msg.speaker, msg.content, `${lastChat.npc_a} ↔ ${lastChat.npc_b}`);
-                }
-            }
-        }
-
     } catch (e) {
-        console.error('Failed to refresh world chat:', e);
+        if (e.name !== 'AbortError') {
+            appendMessage(conv.id, { type: 'system', content: `❌ ${e.message}` });
+            renderMessages(loadMessages(conv.id));
+        }
+    } finally {
+        abortContention = null;
+        updateNpcStates();
     }
 }
 
-// ==================== NPC Chat Trigger Modal ====================
+async function startContention() {
+    if (!currentConv || currentConv.type !== 'group') return;
 
-function setupTriggerChatModal() {
-    triggerNpcChatBtn.addEventListener('click', () => {
-        triggerNpcA.innerHTML = STATE.npcs.map(n => `<option value="${n.name}">${n.name}</option>`).join('');
-        triggerNpcB.innerHTML = STATE.npcs.map(n => `<option value="${n.name}">${n.name}</option>`).join('');
-        triggerChatModal.style.display = 'flex';
-    });
+    const bar = document.createElement('div');
+    bar.className = 'contention-bar';
+    bar.id = 'contentionBar';
+    bar.innerHTML = '<div class="spinner"></div> NPC 自由讨论中... <button class="btn btn-sm" onclick="stopContention()">停止</button>';
+    chatMessages.parentElement.insertBefore(bar, chatMessages);
 
-    triggerChatCancel.addEventListener('click', () => {
-        triggerChatModal.style.display = 'none';
-    });
+    // 使用场景生成（无用户消息，纯 NPC 间互动）
+    await streamScene(currentConv, '');
 
-    triggerChatConfirm.addEventListener('click', async () => {
-        const a = triggerNpcA.value;
-        const b = triggerNpcB.value;
-        if (a === b) {
-            alert('请选择不同的 NPC');
-            return;
+    const barEl = document.getElementById('contentionBar');
+    if (barEl) barEl.remove();
+}
+
+function stopContention() {
+    if (abortContention) { abortContention.abort(); abortContention = null; }
+    const bar = document.getElementById('contentionBar');
+    if (bar) bar.remove();
+}
+
+function deleteConversation(convId) {
+    if (!confirm('删除此对话？聊天记录将丢失。')) return;
+    removeConversation(convId);
+    if (currentConvId === convId) {
+        currentConvId = null;
+        currentConv = null;
+        chatTitle.textContent = '选择一个对话开始';
+        chatSubtitle.textContent = '';
+        chatHeaderActions.innerHTML = '';
+        chatMessages.innerHTML = '<div class="welcome-message"><div class="welcome-icon">🏙️</div><p>选择一个对话开始</p></div>';
+        chatInput.disabled = true;
+        sendBtn.disabled = true;
+    }
+    renderConvList();
+}
+
+// ==================== NPC-NPC Chat Handling ====================
+
+function handleNpcNpcChat(chat) {
+    const convId = makeNpcNpcConvId(chat.npc_a, chat.npc_b);
+    let conv = getConversation(convId);
+
+    if (!conv) {
+        conv = {
+            id: convId, type: 'npcnpc',
+            name: `${chat.npc_a} ↔ ${chat.npc_b}`,
+            participants: [chat.npc_a, chat.npc_b],
+            lastMsg: '', lastTime: new Date().toISOString(), unread: 0
+        };
+    }
+
+    for (const msg of chat.messages || []) {
+        const storedMsg = { sender: msg.speaker, content: msg.content, time: new Date().toISOString() };
+        appendMessage(convId, storedMsg);
+        conv.lastMsg = (msg.content || '').substring(0, 40);
+        conv.lastTime = new Date().toISOString();
+        conv.unread = convId === currentConvId ? 0 : (conv.unread || 0) + 1;
+    }
+
+    upsertConversation(conv);
+    renderConvList();
+
+    // Refresh messages if currently viewing this conversation
+    if (currentConvId === convId) {
+        renderMessages(loadMessages(convId));
+    }
+}
+
+// ==================== NPC Proactive Messages ====================
+
+async function checkProactiveMessages() {
+    try {
+        const data = await apiRequest('GET', '/npcs/pending-messages', null, { useCache: false });
+        if (!data.messages || data.messages.length === 0) return;
+
+        for (const msg of data.messages) {
+            const convId = make1v1ConvId(msg.npc_name);
+            const storedMsg = { sender: msg.npc_name, content: msg.content, time: msg.timestamp || new Date().toISOString() };
+            appendMessage(convId, storedMsg);
+            updateConversationPreview(convId, storedMsg);
+
+            // If this conv doesn't exist, create it
+            if (!getConversation(convId)) {
+                upsertConversation({
+                    id: convId, type: '1v1', name: msg.npc_name,
+                    participants: [msg.npc_name],
+                    lastMsg: msg.content.substring(0, 40),
+                    lastTime: msg.timestamp || new Date().toISOString(), unread: 1
+                });
+            }
         }
-        triggerChatModal.style.display = 'none';
-        try {
-            const result = await triggerNpcNpcChat(a, b);
-            addWorldMessage('system', `🎲 手动触发: ${a} 与 ${b} 开始对话`);
-            addWorldMessage('system', result.message || '已触发');
-            setTimeout(refreshWorldChat, 2000);
-        } catch (e) {
-            addWorldMessage('system', `❌ 触发失败: ${e.message}`);
+
+        renderConvList();
+        if (currentConvId && currentConv) {
+            renderMessages(loadMessages(currentConvId));
         }
-    });
+    } catch (e) { /* silent */ }
 }
 
 // ==================== Polling ====================
 
-function startPolling() {
-    if (STATE.pollTimer) clearInterval(STATE.pollTimer);
-
-    STATE.pollTimer = setInterval(async () => {
-        // Adaptive polling
-        const idleTime = (Date.now() - STATE.lastActivity) / 1000;
-        if (STATE.chatMode === '1v1' && STATE.active1v1Npc) {
-            STATE.pollInterval = 3000;
-        } else if (STATE.chatMode === 'world') {
-            STATE.pollInterval = 5000;
-        } else if (idleTime > 60) {
-            STATE.pollInterval = 15000;
-        } else {
-            STATE.pollInterval = 10000;
+async function updateNpcStates() {
+    try {
+        const data = await fetchNpcStates();
+        if (data.states) {
+            allNpcs.forEach(npc => {
+                const st = data.states.find(s => s.name === npc.name);
+                if (st) npc.state = st.state;
+            });
+            updateStatusSummary();
         }
-
-        try {
-            await fetchAndRenderNpcs();
-        } catch (e) {
-            // Silent fail for polling
-        }
-
-        if (STATE.chatMode === 'world' || document.getElementById('panelWorld').classList.contains('active')) {
-            try {
-                await refreshWorldChat();
-            } catch (e) { /* silent */ }
-        }
-
-    }, 5000); // Base 5s, actual interval managed by adaptive logic
+    } catch (e) { /* silent */ }
 }
 
-// Reset polling timer after activity
-document.addEventListener('click', () => { STATE.lastActivity = Date.now(); });
-document.addEventListener('keydown', () => { STATE.lastActivity = Date.now(); });
+function startPolling() {
+    if (pollingTimer) clearInterval(pollingTimer);
+    pollingTimer = setInterval(async () => {
+        await updateNpcStates();
+        await checkProactiveMessages();
 
-// ==================== Connection ====================
+        // Check NPC-NPC chats
+        try {
+            const npcChatStatus = await fetchNpcNpcChatStatus();
+            if (npcChatStatus.active_chats) {
+                for (const chat of npcChatStatus.active_chats) {
+                    handleNpcNpcChat(chat);
+                }
+            }
+        } catch (e) { /* silent */ }
+
+        renderConvList();
+    }, 5000);
+}
+
+function updateStatusSummary() {
+    const states = allNpcs.map(n => n.state);
+    idleCountEl.textContent = states.filter(s => s === 'idle').length;
+    chattingCountEl.textContent = states.filter(s => s === 'chatting').length;
+    busyCountEl.textContent = states.filter(s => s === 'busy').length;
+    const avg = allNpcs.reduce((s, n) => s + (n.affinity || 50), 0) / (allNpcs.length || 1);
+    avgAffinityEl.textContent = Math.round(avg);
+}
+
+// Stub: called from god.js event handlers, now routes to conversation system
+function addWorldMessage(type, content) {
+    if (type === 'system') {
+        // Find or create a system notification conversation
+        const sysConvId = 'system_log';
+        let conv = getConversation(sysConvId);
+        if (!conv) {
+            conv = { id: sysConvId, type: 'system', name: '系统通知', participants: [], lastMsg: '', lastTime: new Date().toISOString(), unread: 0 };
+        }
+        conv.lastMsg = content.substring(0, 50);
+        conv.lastTime = new Date().toISOString();
+        conv.unread = (conv.unread || 0) + 1;
+        upsertConversation(conv);
+        appendMessage(sysConvId, { sender: 'system', content: content, time: new Date().toISOString() });
+        renderConvList();
+    }
+}
 
 function setConnectionStatus(connected) {
     STATE.connected = connected;
@@ -535,38 +551,29 @@ function setConnectionStatus(connected) {
     connectionText.textContent = connected ? `已连接 (${API_BASE})` : '断开';
 }
 
-// ==================== Keyboard Shortcuts ====================
+// ==================== Helpers ====================
 
-document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-        // Close god panel
-        if (!godPanel.classList.contains('collapsed')) {
-            godPanel.classList.add('collapsed');
-            godPanelToggle.textContent = '⚡ 上帝界面';
-        }
-        // Close modals
-        advanceModal.style.display = 'none';
-        triggerChatModal.style.display = 'none';
-    }
-
-    // Ctrl+N: new timeline
-    if (e.ctrlKey && e.key === 'n') {
-        e.preventDefault();
-        newTimelineName.focus();
-    }
-});
-
-// Retry function for failed NPC load
-function retryLoadNpcs() {
-    npcList.innerHTML = '<div class="loading-placeholder">🔄 重试中...</div>';
-    STATE.connected = true;
-    connectionStatus.className = 'status-dot online';
-    connectionText.textContent = '连接中...';
-    fetchAndRenderNpcs();
+function escapeHtml(str) {
+    if (!str) return '';
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
 }
 
-// Expose functions globally for onclick handlers
-window.selectNpc = selectNpc;
-window.toggleGroupNpc = toggleGroupNpc;
-window.switchActiveTimeline = switchActiveTimeline;
-window.retryLoadNpcs = retryLoadNpcs;
+function formatTimeStr(isoStr) {
+    if (!isoStr) return '';
+    const d = new Date(isoStr);
+    const now = new Date();
+    const pad = n => n.toString().padStart(2, '0');
+    if (d.toDateString() === now.toDateString()) {
+        return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+    return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+// Expose globally
+window.openConversation = openConversation;
+window.startContention = startContention;
+window.stopContention = stopContention;
+window.deleteConversation = deleteConversation;
+window.retryLoadNpcs = () => location.reload();

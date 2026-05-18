@@ -5,6 +5,9 @@ from datetime import datetime
 from typing import Dict, Optional
 from batch_generator import get_batch_generator
 from npc_npc_chat import NPCNPCChatEngine
+from autonomous_thinker import AutonomousThinker
+from group_chat_engine import GroupChatEngine
+from scene_generator import SceneGenerator
 from agents import get_npc_manager
 from timeline_manager import get_timeline_manager
 
@@ -31,18 +34,37 @@ class NPCStateManager:
         self.last_update: Optional[datetime] = None
         self.next_update_time: Optional[datetime] = None
 
-        # NPC 间聊天引擎
+        # 共享实例
         npc_mgr = get_npc_manager()
         tm_mgr = get_timeline_manager()
+        llm = npc_mgr.llm if npc_mgr.llm else None
+
+        # 场景生成器（核心，被其他引擎共用）
+        self.scene_generator = SceneGenerator(
+            npc_manager=npc_mgr, timeline_manager=tm_mgr, llm=llm
+        )
+
+        # NPC 间聊天引擎（使用场景生成器）
         self.npc_chat_engine = NPCNPCChatEngine(
-            npc_manager=npc_mgr,
-            timeline_manager=tm_mgr,
-            llm=npc_mgr.llm if npc_mgr.llm else None
+            npc_manager=npc_mgr, timeline_manager=tm_mgr, llm=llm
+        )
+        self.npc_chat_engine.scene_generator = self.scene_generator
+
+        # 自主思考引擎（使用场景生成器）
+        self.autonomous_thinker = AutonomousThinker(
+            npc_manager=npc_mgr, timeline_manager=tm_mgr, llm=llm
+        )
+        self.autonomous_thinker.scene_generator = self.scene_generator
+
+        # 群聊抢话引擎
+        self.group_chat_engine = GroupChatEngine(
+            npc_manager=npc_mgr, timeline_manager=tm_mgr, llm=llm
         )
 
         # 后台任务
         self._update_task: Optional[asyncio.Task] = None
         self._npc_chat_task: Optional[asyncio.Task] = None
+        self._think_task: Optional[asyncio.Task] = None
         self._running = False
 
         print(f"📊 NPC状态管理器初始化完成 (更新间隔: {update_interval}秒)")
@@ -65,6 +87,9 @@ class NPCStateManager:
         # 启动 NPC 间聊天检查任务
         self._npc_chat_task = asyncio.create_task(self._npc_chat_loop())
 
+        # 启动自主思考循环
+        self._think_task = asyncio.create_task(self._think_loop())
+
     async def stop(self):
         """停止后台更新任务"""
         if not self._running:
@@ -72,7 +97,7 @@ class NPCStateManager:
 
         self._running = False
 
-        for task in [self._update_task, self._npc_chat_task]:
+        for task in [self._update_task, self._npc_chat_task, self._think_task]:
             if task:
                 task.cancel()
                 try:
@@ -107,6 +132,18 @@ class NPCStateManager:
             except Exception as e:
                 print(f"❌ NPC聊天检查失败: {e}")
     
+    async def _think_loop(self):
+        """NPC 自主思考循环"""
+        think_interval = 45
+        while self._running:
+            try:
+                await asyncio.sleep(think_interval)
+                await self.autonomous_thinker.think_all()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                print(f"❌ 自主思考失败: {e}")
+
     async def _update_npc_states(self):
         """更新NPC状态"""
         try:

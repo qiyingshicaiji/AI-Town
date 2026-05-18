@@ -2,10 +2,13 @@
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field
+from typing import List
 from contextlib import asynccontextmanager
 import uvicorn
 import time
+import json
 
 from config import settings
 from models import (
@@ -25,6 +28,22 @@ from models import (
 from agents import get_npc_manager
 from state_manager import get_state_manager
 from timeline_manager import get_timeline_manager
+from scene_generator import SceneGenerator
+
+# 全局场景生成器
+_scene_generator = None
+
+def get_scene_generator():
+    global _scene_generator
+    if _scene_generator is None:
+        npc_mgr = get_npc_manager()
+        tm_mgr = get_timeline_manager()
+        _scene_generator = SceneGenerator(
+            npc_manager=npc_mgr,
+            timeline_manager=tm_mgr,
+            llm=npc_mgr.llm if npc_mgr.llm else None
+        )
+    return _scene_generator
 
 # 生命周期管理
 @asynccontextmanager
@@ -532,6 +551,55 @@ async def set_active_timeline(timeline_id: str):
 
 # ==================== 群聊路由 ====================
 
+import asyncio as _asyncio, random as _random
+
+class SceneRequest(BaseModel):
+    npc_names: List[str] = Field(..., min_length=1, max_length=5)
+    message: str = Field(default="")
+    conversation_id: str = Field(default="")
+    history: List[dict] = Field(default_factory=list)
+
+@app.post("/chat/scene")
+async def chat_scene(request: SceneRequest):
+    """统一场景生成 + SSE 流式返回
+
+    支持: 1v1聊天 / 群聊 / NPC间对话
+    """
+    npc_mgr, _, _ = get_managers()
+    scene_gen = get_scene_generator()
+
+    for name in request.npc_names:
+        if not npc_mgr.get_npc_info(name):
+            raise HTTPException(status_code=404, detail=f"NPC '{name}' 不存在")
+
+    # 获取好感度
+    affinities = {}
+    if npc_mgr.relationship_manager:
+        for name in request.npc_names:
+            affinities[name] = npc_mgr.relationship_manager.get_affinity(name)
+
+    is_group = len(request.npc_names) > 1
+
+    async def generate():
+        scene = await scene_gen.generate_scene(
+            npc_names=request.npc_names,
+            trigger_message=request.message,
+            history=request.history,
+            affinity_context=affinities,
+            max_messages=10 if is_group else 4,
+            is_group=is_group,
+        )
+        for msg in scene:
+            yield f"data: {json.dumps(msg, ensure_ascii=False)}\n\n"
+            await _asyncio.sleep(_random.uniform(0.6, 1.3))
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
+
 @app.post("/group-chat", response_model=GroupChatResponse)
 async def group_chat(request: GroupChatRequest):
     """群聊接口 - 同时与多个 NPC 对话"""
@@ -546,6 +614,66 @@ async def group_chat(request: GroupChatRequest):
         return GroupChatResponse(**result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"群聊处理失败: {str(e)}")
+
+
+# ==================== 自主思考路由 ====================
+
+@app.get("/npcs/pending-messages")
+async def get_pending_messages(npc_name: str = None):
+    """获取 NPC 主动发起的待处理消息"""
+    _, state_mgr, _ = get_managers()
+    thinker = getattr(state_mgr, 'autonomous_thinker', None)
+    if not thinker:
+        return {"messages": []}
+    msgs = thinker.get_pending(npc_name)
+    return {"messages": msgs}
+
+
+# ==================== 群聊抢话路由 ====================
+
+@app.post("/group-chat/contention")
+async def group_chat_contention(request: GroupChatRequest):
+    """群聊抢话 - NPC 自主竞争发言（全量返回）"""
+    _, state_mgr, _ = get_managers()
+    engine = getattr(state_mgr, 'group_chat_engine', None)
+    if not engine:
+        raise HTTPException(status_code=503, detail="群聊抢话引擎未初始化")
+
+    npc_mgr, _, _ = get_managers()
+    for name in request.npc_names:
+        if not npc_mgr.get_npc_info(name):
+            raise HTTPException(status_code=404, detail=f"NPC '{name}' 不存在")
+
+    try:
+        result = await engine.run_contention(request.npc_names, request.message)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"抢话失败: {str(e)}")
+
+
+@app.post("/group-chat/contention/stream")
+async def group_chat_contention_stream(request: GroupChatRequest):
+    """群聊抢话 - SSE 流式返回每轮结果"""
+    from fastapi.responses import StreamingResponse
+    _, state_mgr, _ = get_managers()
+    engine = getattr(state_mgr, 'group_chat_engine', None)
+    if not engine:
+        raise HTTPException(status_code=503, detail="群聊抢话引擎未初始化")
+
+    npc_mgr, _, _ = get_managers()
+    for name in request.npc_names:
+        if not npc_mgr.get_npc_info(name):
+            raise HTTPException(status_code=404, detail=f"NPC '{name}' 不存在")
+
+    async def generate():
+        async for event in engine.run_contention_streaming(request.npc_names, request.message):
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
 
 
 # ==================== NPC 间聊天路由 ====================
