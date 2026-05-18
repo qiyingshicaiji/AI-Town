@@ -25,8 +25,13 @@ const eventHistory = document.getElementById('eventHistory');
 // God panel toggle
 godPanelToggle.addEventListener('click', () => {
     godPanel.classList.toggle('collapsed');
-    godPanelToggle.textContent = godPanel.classList.contains('collapsed') ? '⚡ 上帝界面' : '⚡ 隐藏';
-    if (!godPanel.classList.contains('collapsed')) {
+    const isCollapsed = godPanel.classList.contains('collapsed');
+    godPanelToggle.textContent = isCollapsed ? '⚡ 上帝界面' : '⚡ 隐藏';
+    // Backdrop for tablet/mobile
+    if (window.innerWidth < 1024) {
+        document.getElementById('godBackdrop').classList.toggle('open', !isCollapsed);
+    }
+    if (!isCollapsed) {
         refreshGodPanel();
     }
 });
@@ -34,6 +39,16 @@ godPanelToggle.addEventListener('click', () => {
 godPanelClose.addEventListener('click', () => {
     godPanel.classList.add('collapsed');
     godPanelToggle.textContent = '⚡ 上帝界面';
+    if (window.innerWidth < 1024) {
+        document.getElementById('godBackdrop').classList.remove('open');
+    }
+});
+
+// God backdrop click to close
+document.getElementById('godBackdrop').addEventListener('click', () => {
+    godPanel.classList.add('collapsed');
+    godPanelToggle.textContent = '⚡ 上帝界面';
+    document.getElementById('godBackdrop').classList.remove('open');
 });
 
 // Timeline selector change
