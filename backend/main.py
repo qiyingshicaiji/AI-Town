@@ -757,7 +757,7 @@ if __name__ == "__main__":
         "main:app",
         host=settings.API_HOST,
         port=settings.API_PORT,
-        reload=True,  # 开发模式自动重载
+        reload=False,  # 生产环境关闭自动重载
         log_level="info"
     )
 
