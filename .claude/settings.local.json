@@ -5,7 +5,8 @@
       "PowerShell(Get-ChildItem *)",
       "PowerShell(Get-ChildItem -Path \"E:\\\\agent_test\\\\AI-Town\\\\hello-agents\\\\code\" -Recurse -File -Depth 4 | Select-Object FullName | ForEach-Object { $_.FullName })",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "Skill(web-design-guidelines)"
+      "Skill(web-design-guidelines)",
+      "PowerShell(Get-ChildItem -Path \"E:\\\\agent_test\\\\AI-Town\\\\hello-agents\\\\code\\\\chapter15\\\\Helloagents-AI-Town\\\\frontend\" -Recurse -Depth 2 | Select-Object FullName, Length | ForEach-Object { $_.FullName.Replace\\(\"E:\\\\agent_test\\\\AI-Town\\\\hello-agents\\\\code\\\\chapter15\\\\Helloagents-AI-Town\\\\\", \"\"\\) })"
     ]
   }
 }
