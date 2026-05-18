@@ -65,8 +65,22 @@ function setupEventListeners() {
             if (!godPanel.classList.contains('collapsed')) {
                 godPanel.classList.add('collapsed');
                 godPanelToggle.textContent = '⚡ 上帝界面';
+                if (window.innerWidth < 1024) {
+                    document.getElementById('godBackdrop').classList.remove('open');
+                }
             }
         }
+    });
+
+    // Sidebar toggle (mobile)
+    const sidebarBackdrop = document.getElementById('sidebarBackdrop');
+    document.getElementById('sidebarToggle').addEventListener('click', () => {
+        document.getElementById('convSidebar').classList.toggle('open');
+        sidebarBackdrop.classList.toggle('open');
+    });
+    sidebarBackdrop.addEventListener('click', () => {
+        document.getElementById('convSidebar').classList.remove('open');
+        sidebarBackdrop.classList.remove('open');
     });
 }
 
@@ -202,6 +216,13 @@ async function openConversation(convId) {
 
     chatInput.disabled = currentConv.type === 'npcnpc';
     sendBtn.disabled = currentConv.type === 'npcnpc';
+
+    // Auto-close sidebar on mobile
+    if (window.innerWidth < 768) {
+        document.getElementById('convSidebar').classList.remove('open');
+        document.getElementById('sidebarBackdrop').classList.remove('open');
+    }
+
     if (currentConv.type !== 'npcnpc') chatInput.focus();
 }
 

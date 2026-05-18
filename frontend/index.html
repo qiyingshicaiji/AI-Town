@@ -10,6 +10,7 @@
     <!-- 顶部导航栏 -->
     <header class="top-bar">
         <div class="top-bar-left">
+            <button class="hamburger" id="sidebarToggle">☰</button>
             <h1 class="app-title">🏙 AI-Town 赛博小镇</h1>
         </div>
         <div class="top-bar-center">
@@ -50,6 +51,7 @@
                 </div>
             </div>
         </aside>
+        <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
 
         <!-- 右侧聊天区 (单面板，根据选中对话切换) -->
         <section class="chat-area" id="chatArea">
@@ -105,6 +107,7 @@
                 <div class="event-history" id="eventHistory"><p class="god-hint">暂无事件记录</p></div>
             </div>
         </aside>
+        <div class="god-backdrop" id="godBackdrop"></div>
     </div>
 
     <!-- 创建群聊对话框 -->

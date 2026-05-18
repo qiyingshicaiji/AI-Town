@@ -324,10 +324,233 @@ body {
 ::-webkit-scrollbar-thumb { background: var(--gray-300); border-radius: 10px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--gray-400); }
 
-/* Responsive */
-@media (max-width: 768px) {
-    .conv-sidebar { width: 240px; }
-    .god-panel { width: 280px; }
-    .app-title { font-size: var(--text-sm); }
-    .message-row { max-width: 88%; }
+/* ==================== Responsive ==================== */
+
+/* Base: hidden on desktop */
+.hamburger { display: none; }
+.sidebar-backdrop,
+.god-backdrop { display: none; }
+
+/* Tablet: 768-1023px — narrower sidebar, god panel overlay */
+@media (min-width: 768px) and (max-width: 1023px) {
+    .conv-sidebar { width: 220px; }
+
+    .god-panel {
+        position: fixed;
+        top: var(--topbar-h); right: 0; bottom: 0;
+        width: var(--god-w);
+        z-index: 80;
+        transform: translateX(100%);
+        transition: transform .25s ease, box-shadow .25s ease;
+        border-left: none;
+        box-shadow: none;
+    }
+    .god-panel.collapsed {
+        width: var(--god-w);
+        transform: translateX(100%);
+        overflow: hidden;
+        border: none;
+        box-shadow: none;
+        padding: 0;
+    }
+    .god-panel:not(.collapsed) {
+        transform: translateX(0);
+        box-shadow: var(--shadow-lg);
+    }
+    .god-backdrop {
+        display: block;
+        position: fixed;
+        top: var(--topbar-h); left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,.45);
+        z-index: 79;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity .25s ease;
+    }
+    .god-backdrop.open {
+        opacity: 1;
+        pointer-events: auto;
+    }
+}
+
+/* Mobile: < 768px — single panel with overlay drawers */
+@media (max-width: 767px) {
+    /* --- Top Bar: icon-only --- */
+    .top-bar { padding: 0 8px; gap: 6px; }
+    .top-bar-left { gap: 4px; }
+    .hamburger {
+        display: inline-flex;
+        align-items: center; justify-content: center;
+        width: 32px; height: 32px;
+        background: transparent; border: none;
+        color: #fff; font-size: 20px;
+        cursor: pointer; border-radius: var(--radius-sm);
+        flex-shrink: 0;
+    }
+    .hamburger:active { background: rgba(255,255,255,.1); }
+    .app-title {
+        font-size: 0;
+        width: 28px; height: 28px;
+        overflow: hidden;
+        flex-shrink: 0;
+    }
+    .app-title::before {
+        content: '🏙';
+        font-size: 20px;
+        line-height: 28px;
+    }
+    .top-bar-center { gap: 4px; }
+    .timeline-selector select {
+        max-width: 80px;
+        font-size: 11px;
+        padding: 4px 6px;
+    }
+    .day-display {
+        font-size: 11px;
+        padding: 4px 7px;
+        white-space: nowrap;
+    }
+    #advanceDayBtn {
+        font-size: 0;
+        width: 32px; height: 32px;
+        padding: 0;
+        line-height: 1;
+    }
+    #advanceDayBtn::before {
+        content: '⏩';
+        font-size: 15px;
+    }
+    #godPanelToggle {
+        font-size: 0;
+        width: 32px; height: 32px;
+        padding: 0;
+        line-height: 1;
+    }
+    #godPanelToggle::before {
+        content: '⚡';
+        font-size: 15px;
+    }
+    .top-bar-right { gap: 4px; }
+    #connectionText { display: none; }
+    .status-dot { width: 7px; height: 7px; }
+
+    /* --- Sidebar: fixed drawer from left --- */
+    .conv-sidebar {
+        position: fixed;
+        top: var(--topbar-h); left: 0; bottom: 0;
+        width: min(320px, 82vw);
+        z-index: 60;
+        transform: translateX(-100%);
+        transition: transform .25s ease, box-shadow .25s ease;
+        border-right: none;
+        box-shadow: none;
+        border-radius: 0 var(--radius-md) var(--radius-md) 0;
+    }
+    .conv-sidebar.open {
+        transform: translateX(0);
+        box-shadow: var(--shadow-lg);
+    }
+    .sidebar-backdrop {
+        display: block;
+        position: fixed;
+        top: var(--topbar-h); left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,.45);
+        z-index: 59;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity .25s ease;
+    }
+    .sidebar-backdrop.open {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    /* --- God panel: fixed drawer from right --- */
+    .god-panel {
+        position: fixed;
+        top: var(--topbar-h); right: 0; bottom: 0;
+        width: min(360px, 90vw);
+        z-index: 80;
+        transform: translateX(100%);
+        transition: transform .25s ease, box-shadow .25s ease;
+        border-left: none;
+        box-shadow: none;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+    }
+    .god-panel.collapsed {
+        width: min(360px, 90vw);
+        transform: translateX(100%);
+        overflow: hidden;
+        border: none;
+        box-shadow: none;
+        padding: 0;
+    }
+    .god-panel:not(.collapsed) {
+        transform: translateX(0);
+        box-shadow: var(--shadow-lg);
+    }
+    .god-backdrop {
+        display: block;
+        position: fixed;
+        top: var(--topbar-h); left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,.45);
+        z-index: 79;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity .25s ease;
+    }
+    .god-backdrop.open {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    /* --- Chat Area --- */
+    .chat-messages { padding: 12px; gap: 12px; }
+    .message-row { max-width: 92%; }
+    .message-avatar { width: 32px; height: 32px; font-size: 12px; }
+    .message-bubble { padding: 8px 12px; font-size: var(--text-sm); }
+    .welcome-icon { font-size: 40px; }
+    .welcome-message h2 { font-size: var(--text-lg); }
+    .chat-header { padding: 10px 14px; min-height: 46px; }
+    .chat-header-info #chatTitle { font-size: var(--text-sm); }
+    .chat-input-area { padding: 10px 12px; gap: 8px; }
+    .chat-input { font-size: 16px; padding: 9px 12px; }
+    .btn-send { padding: 8px 16px; font-size: var(--text-sm); }
+
+    /* --- Contention bar --- */
+    .contention-bar { padding: 6px 14px; font-size: 11px; gap: 6px; flex-wrap: wrap; }
+
+    /* --- Modal --- */
+    .modal { padding: 20px; max-width: 94vw; margin: 0 10px; max-height: 85vh; overflow-y: auto; }
+    .modal h3 { font-size: var(--text-base); }
+    .modal-buttons { gap: 8px; flex-wrap: wrap; }
+    .checkbox-label { padding: 10px 8px; min-height: 44px; }
+
+    /* --- Touch targets --- */
+    .conv-item { padding: 14px; }
+    .btn { min-height: 36px; }
+    .btn-sm { min-height: 32px; }
+    .search-input { font-size: 16px; padding: 9px 12px; }
+
+    /* --- Timeline table scrollable --- */
+    .timeline-list { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+}
+
+/* Small phone: < 480px */
+@media (max-width: 479px) {
+    .conv-sidebar { width: 100vw; border-radius: 0; }
+    .god-panel { width: 100vw; }
+    .god-panel.collapsed { width: 100vw; }
+    .message-row { max-width: 96%; }
+    .message-avatar { width: 28px; height: 28px; font-size: 11px; }
+    .message-bubble { padding: 7px 10px; }
+    .chat-messages { padding: 10px; gap: 10px; }
+    .top-bar-center { gap: 3px; }
+    .timeline-selector select { max-width: 65px; font-size: 10px; padding: 3px 4px; }
+    .day-display { font-size: 10px; padding: 3px 5px; }
+    #advanceDayBtn, #godPanelToggle { width: 28px; height: 28px; }
+    #advanceDayBtn::before, #godPanelToggle::before { font-size: 13px; }
+    .modal { padding: 16px; }
 }
