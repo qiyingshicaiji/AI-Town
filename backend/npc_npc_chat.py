@@ -81,15 +81,10 @@ class NPCNPCChatEngine:
     MAX_DAILY_CALLS = settings.NPC_NPC_CHAT_MAX_DAILY
 
     def __init__(self, npc_manager, timeline_manager, llm=None):
-        """
-        Args:
-            npc_manager: NPCAgentManager 实例
-            timeline_manager: TimelineManager 实例
-            llm: HelloAgentsLLM 实例（可选）
-        """
         self.npc_manager = npc_manager
         self.timeline_manager = timeline_manager
         self.llm = llm
+        self.scene_generator = None  # 由 state_manager 注入
 
         # 冷却追踪: {(npc_a, npc_b): datetime}
         self.cooldowns: Dict[tuple, datetime] = {}
@@ -274,8 +269,24 @@ class NPCNPCChatEngine:
         return True
 
     async def _generate_conversation(self, npc_a: str, npc_b: str) -> List[dict]:
-        """生成 NPC 间对话（1-3 轮交替发言）"""
+        """生成 NPC 间对话（优先用场景生成器）"""
         self.daily_call_count += 1
+
+        # 优先使用场景生成器
+        if self.scene_generator:
+            try:
+                scene = await self.scene_generator.generate_scene(
+                    npc_names=[npc_a, npc_b],
+                    trigger_message="",
+                    max_messages=6,
+                    is_npc_npc=True,
+                )
+                if scene:
+                    content_str = "|".join(m.get("content", "") for m in scene)
+                    self._last_chat_content = content_str
+                    return scene
+            except Exception as e:
+                print(f"⚠️ 场景生成器NPC对话失败: {e}")
 
         # 获取事件背景
         event_context = ""
