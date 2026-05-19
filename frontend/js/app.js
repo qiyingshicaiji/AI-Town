@@ -381,7 +381,25 @@ async function streamScene(conv, userMessage) {
                 if (!line.startsWith('data: ')) continue;
                 try {
                     const msg = JSON.parse(line.slice(6));
-                    if (msg.type === 'done') return;
+                    if (msg.type === 'done') {
+                        // 应用好感度更新
+                        if (msg.affinity_updates) {
+                            for (const [name, data] of Object.entries(msg.affinity_updates)) {
+                                const npc = allNpcs.find(n => n.name === name);
+                                if (npc) {
+                                    npc.affinity = data.affinity;
+                                    npc.level = data.level;
+                                }
+                            }
+                            updateStatusSummary();
+                            // 刷新正在查看的对话头（好感度数字）
+                            if (currentConv && currentConv.type === '1v1') {
+                                const npc = allNpcs.find(n => n.name === currentConv.name);
+                                if (npc) chatSubtitle.textContent = `${npc.title} · 好感度: ${Math.round(npc.affinity)}`;
+                            }
+                        }
+                        return;
+                    }
                     if (msg.speaker && msg.content) {
                         const stored = { sender: msg.speaker, content: msg.content, time: new Date().toISOString() };
                         appendMessage(conv.id, stored);
@@ -519,11 +537,23 @@ async function updateNpcStates() {
     } catch (e) { /* silent */ }
 }
 
+let lastAffinityRefresh = 0;
+
 function startPolling() {
     if (pollingTimer) clearInterval(pollingTimer);
     pollingTimer = setInterval(async () => {
         await updateNpcStates();
         await checkProactiveMessages();
+
+        // 定期刷新好感度（每 30 秒）
+        if (Date.now() - lastAffinityRefresh > 30000) {
+            lastAffinityRefresh = Date.now();
+            try {
+                const results = await Promise.all(allNpcs.map(n => fetchNpcAffinity(n.name).catch(() => ({ affinity: 50 }))));
+                results.forEach((r, i) => { allNpcs[i].affinity = r.affinity || 50; allNpcs[i].level = r.level || '友好'; });
+                updateStatusSummary();
+            } catch (e) { /* silent */ }
+        }
 
         // Check NPC-NPC chats (active + recently completed)
         try {
