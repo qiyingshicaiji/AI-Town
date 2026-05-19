@@ -288,24 +288,17 @@ NPC: "当然可以!我很乐意分享。"
             return "陌生"
     
     def get_affinity_modifier(self, affinity: float) -> str:
-        """获取好感度修饰词 (用于调整对话风格)
-        
-        Args:
-            affinity: 好感度值 (0-100)
-            
-        Returns:
-            对话风格修饰词
-        """
+        """获取好感度修饰词 (用于调整对话风格) — 强指令式"""
         if affinity >= 80:
-            return "非常热情友好,像老朋友一样亲切,愿意分享私人话题"
+            return "【挚友级·好感度80+】你必须表现得非常热情，像见到最好的老朋友。主动关心对方，分享私人话题，语气充满温暖和信任。不要说任何冷淡或疏远的话。"
         elif affinity >= 60:
-            return "友好热情,愿意多聊,会主动关心对方"
+            return "【亲密级·好感度60-79】你对对方印象很好。表现得友好热情，愿意多聊天，语气轻松亲切，可以主动关心对方、找话题。"
         elif affinity >= 40:
-            return "礼貌友善,正常交流,保持专业"
+            return "【友好级·好感度40-59】你对对方印象一般。保持礼貌友善，正常交流即可。维持同事间的专业距离，不过分热情也不冷淡。"
         elif affinity >= 20:
-            return "礼貌但略显生疏,回答简洁"
+            return "【熟悉级·好感度20-39】你不太熟悉对方。表现得礼貌但略显生疏，回答尽量简洁，不要主动扩展话题。偶尔可以看手机或忙别的事。"
         else:
-            return "冷淡疏离,不太愿意多说,回答简短"
+            return "【冷淡级·好感度0-19】你不太喜欢对方。表现得冷淡疏离，回答极其简短（不超过10个字），语气客气但疏远，可以找借口结束对话。"
     
     # ==================== NPC 间好感度 ====================
 
@@ -332,7 +325,7 @@ NPC: "当然可以!我很乐意分享。"
         if outer not in self.npc_npc_affinity:
             self.npc_npc_affinity[outer] = {}
         if inner not in self.npc_npc_affinity[outer]:
-            self.npc_npc_affinity[outer][inner] = 30.0  # 初始好感度 30
+            self.npc_npc_affinity[outer][inner] = 45.0  # 初始好感度 45
 
         return self.npc_npc_affinity[outer][inner]
 
@@ -407,6 +400,11 @@ NPC: "当然可以!我很乐意分享。"
                 if delta != 0:
                     self.update_npc_npc_affinity(a, b, delta)
                     print(f"  📰 事件驱动好感度: {a}↔{b} {reason} → Δ{delta:+.0f}")
+
+    def on_timeline_event(self, event_text: str, npc_names: List[str]):
+        """当时间线事件变更时调用，自动调整NPC间好感度"""
+        if event_text:
+            self.apply_event_affinity(event_text, npc_names)
 
     def get_all_affinities(self, player_id: str = "player") -> Dict[str, Dict]:
         """获取所有NPC的好感度信息

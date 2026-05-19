@@ -12,9 +12,9 @@ class AutonomousThinker:
     定时检查条件，决定是否主动向玩家发起对话。
     """
 
-    THINK_INTERVAL = 20       # 思考间隔（秒）
-    BASE_PROBABILITY = 0.20   # 基础主动发起概率
-    LAST_INTERACT_THRESHOLD = 180  # 3分钟内未互动 → 增加概率
+    THINK_INTERVAL = 15       # 思考间隔（秒）
+    BASE_PROBABILITY = 0.30   # 基础主动发起概率
+    LAST_INTERACT_THRESHOLD = 120  # 2分钟内未互动 → 增加概率
 
     def __init__(self, npc_manager, timeline_manager, llm=None):
         self.npc_manager = npc_manager
@@ -32,7 +32,7 @@ class AutonomousThinker:
         self.greet_cooldown: Dict[str, datetime] = {}
 
         print("🧠 NPC 自主思考引擎已初始化")
-        print(f"   思考间隔: {self.THINK_INTERVAL}s, 基础概率: {self.BASE_PROBABILITY}")
+        print(f"   思考间隔: {self.THINK_INTERVAL}s, 基础概率: {self.BASE_PROBABILITY}, 冷却: 90s")
 
     def record_interaction(self, npc_name: str):
         """记录 NPC 与玩家的互动时间"""
@@ -49,10 +49,10 @@ class AutonomousThinker:
         if state["state"] != "idle":
             return None
 
-        # 冷却检查（同一 NPC 两次主动消息间隔 >= 120s）
+        # 冷却检查（同一 NPC 两次主动消息间隔 >= 90s）
         if npc_name in self.greet_cooldown:
             elapsed = (datetime.now() - self.greet_cooldown[npc_name]).total_seconds()
-            if elapsed < 120:
+            if elapsed < 90:
                 return None
 
         # 计算主动发起概率
@@ -70,6 +70,18 @@ class AutonomousThinker:
         event = self.timeline_manager.get_event_context()
         if event:
             probability *= 2.0
+
+        # 因素 2.5: 近期感知观察（观察到新事物 → 更想交流）
+        mem_mgr = self.npc_manager.memories.get(npc_name)
+        if mem_mgr:
+            try:
+                perceptions = mem_mgr.retrieve_memories(
+                    query="看到 注意到", memory_types=["perceptual"], limit=1, min_importance=0.3
+                )
+                if perceptions:
+                    probability *= 1.5
+            except Exception:
+                pass
 
         # 因素 3: 长时间未互动
         last = self.last_interactions.get(npc_name)
@@ -133,6 +145,20 @@ class AutonomousThinker:
             except Exception:
                 pass
 
+        # 获取近期感知观察
+        perception_text = ""
+        if mem_mgr:
+            try:
+                perceptions = mem_mgr.retrieve_memories(
+                    query="看到 注意到", memory_types=["perceptual"], limit=2, min_importance=0.3
+                )
+                if perceptions:
+                    perception_text = "【你最近观察到的】\n" + "\n".join(
+                        f"- {p.content[:80]}" for p in perceptions
+                    ) + "\n\n"
+            except Exception:
+                pass
+
         # 构建 prompt
         affinity_desc = "老朋友" if affinity >= 80 else "比较熟悉" if affinity >= 60 else "普通同事" if affinity >= 40 else "不太熟"
         memory_text = ""
@@ -145,7 +171,7 @@ class AutonomousThinker:
 
         prompt = f"""你是{info['title']}{npc_name}。你决定主动和办公室里的同事（玩家）打个招呼或聊点什么。
 
-{event_text}{memory_text}
+{event_text}{perception_text}{memory_text}
 【当前关系】{affinity_desc}（好感度: {affinity:.0f}）
 【你的性格】{info.get('personality', '')}
 

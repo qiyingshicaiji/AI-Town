@@ -60,7 +60,7 @@ class NPCNPCChatEngine:
     """NPC 间聊天引擎
 
     触发条件:
-    1. NPC 间好感度 >= AFFINITY_THRESHOLD (60)
+    1. NPC 间好感度 >= AFFINITY_THRESHOLD (50)
     2. 双方都是 IDLE 状态
     3. 随机概率 TRIGGER_PROBABILITY (30%)
     4. 冷却时间已过 (120s)
@@ -77,7 +77,7 @@ class NPCNPCChatEngine:
     MAX_DURATION = settings.NPC_STATE_TIMEOUT_BUSY  # 60s
     COOLDOWN = 120
     TRIGGER_PROBABILITY = 0.30
-    AFFINITY_THRESHOLD = 60
+    AFFINITY_THRESHOLD = 50
     MAX_DAILY_CALLS = settings.NPC_NPC_CHAT_MAX_DAILY
 
     def __init__(self, npc_manager, timeline_manager, llm=None):

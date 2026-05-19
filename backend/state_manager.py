@@ -10,6 +10,7 @@ from group_chat_engine import GroupChatEngine
 from scene_generator import SceneGenerator
 from agents import get_npc_manager
 from timeline_manager import get_timeline_manager
+from perception_engine import PerceptionEngine
 
 class NPCStateManager:
     """NPC状态管理器
@@ -61,10 +62,18 @@ class NPCStateManager:
             npc_manager=npc_mgr, timeline_manager=tm_mgr, llm=llm
         )
 
+        # 感知引擎
+        self.perception_engine = PerceptionEngine(
+            npc_manager=npc_mgr, timeline_manager=tm_mgr, llm=llm
+        )
+        # 注入到 NPCAgentManager 供 chat() 使用
+        npc_mgr.perception_engine = self.perception_engine
+
         # 后台任务
         self._update_task: Optional[asyncio.Task] = None
         self._npc_chat_task: Optional[asyncio.Task] = None
         self._think_task: Optional[asyncio.Task] = None
+        self._perception_task: Optional[asyncio.Task] = None
         self._running = False
 
         print(f"📊 NPC状态管理器初始化完成 (更新间隔: {update_interval}秒)")
@@ -90,6 +99,9 @@ class NPCStateManager:
         # 启动自主思考循环
         self._think_task = asyncio.create_task(self._think_loop())
 
+        # 启动感知引擎循环
+        self._perception_task = asyncio.create_task(self._perception_loop())
+
     async def stop(self):
         """停止后台更新任务"""
         if not self._running:
@@ -97,7 +109,7 @@ class NPCStateManager:
 
         self._running = False
 
-        for task in [self._update_task, self._npc_chat_task, self._think_task]:
+        for task in [self._update_task, self._npc_chat_task, self._think_task, self._perception_task]:
             if task:
                 task.cancel()
                 try:
@@ -127,6 +139,14 @@ class NPCStateManager:
                 chat_id = await self.npc_chat_engine.check_and_trigger()
                 if chat_id:
                     print(f"💬 NPC间对话已触发: {chat_id}")
+                    # 通知感知引擎：让其他NPC观察这场对话
+                    chat_data = self.npc_chat_engine.active_chats.get(chat_id)
+                    if chat_data:
+                        self.perception_engine.observe_npc_chat(
+                            chat_data.get('npc_a', ''),
+                            chat_data.get('npc_b', ''),
+                            chat_data.get('messages', [])
+                        )
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -134,7 +154,7 @@ class NPCStateManager:
     
     async def _think_loop(self):
         """NPC 自主思考循环"""
-        think_interval = 45
+        think_interval = 15  # Phase 4: 45→15秒
         while self._running:
             try:
                 await asyncio.sleep(think_interval)
@@ -143,6 +163,18 @@ class NPCStateManager:
                 break
             except Exception as e:
                 print(f"❌ 自主思考失败: {e}")
+
+    async def _perception_loop(self):
+        """感知引擎扫描循环"""
+        perception_interval = 60  # 每 60 秒扫描一次
+        while self._running:
+            try:
+                await asyncio.sleep(perception_interval)
+                self.perception_engine.scan_and_observe()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                print(f"❌ 感知扫描失败: {e}")
 
     async def _update_npc_states(self):
         """更新NPC状态"""

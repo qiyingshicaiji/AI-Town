@@ -224,7 +224,7 @@ class NPCAgentManager:
             storage_path=memory_dir,
             working_memory_capacity=10,  # 最近10条对话
             working_memory_tokens=2000,  # 最多2000个token
-            episodic_memory_capacity=100,  # 最多100条长期记忆
+            episodic_memory_capacity=150,  # 最多150条长期记忆
             enable_forgetting=True,  # 启用遗忘机制
             forgetting_threshold=0.3  # 重要性低于0.3的记忆会被遗忘
         )
@@ -236,7 +236,7 @@ class NPCAgentManager:
             enable_working=True,  # 启用工作记忆 (短期)
             enable_episodic=True,  # 启用情景记忆 (长期)
             enable_semantic=False,  # 不需要语义记忆
-            enable_perceptual=False  # 不需要感知记忆
+            enable_perceptual=True  # 启用感知记忆 (供感知引擎使用)
         )
 
         print(f"  💾 {npc_name}的记忆系统已初始化 (存储路径: {memory_dir})")
@@ -369,10 +369,28 @@ class NPCAgentManager:
                 )
                 log_memory_retrieval(npc_name, len(relevant_memories), relevant_memories)
 
-            # ⭐ 3. 构建增强的提示词 (包含事件 + 好感度 + 记忆上下文)
-            memory_context = self._build_memory_context(relevant_memories)
+            # ⭐ 3. 构建增强的提示词 (包含事件 + 好感度 + 感知 + 记忆上下文)
+            # 获取当前时间线ID用于记忆过滤
+            current_timeline_id = None
+            try:
+                current_timeline_id = self.timeline_manager._active_timeline_id
+            except Exception:
+                pass
 
-            enhanced_message = event_context + affinity_context
+            memory_context = self._build_memory_context(relevant_memories, current_timeline_id)
+
+            # 感知上下文（由 PerceptionEngine 注入，Phase 3 实现）
+            perception_context = ""
+            if hasattr(self, 'perception_engine') and self.perception_engine:
+                try:
+                    observations = self.perception_engine.get_observations(npc_name, limit=3)
+                    if observations:
+                        obs_text = "\n".join(f"  - {obs}" for obs in observations)
+                        perception_context = f"【你观察到的】\n{obs_text}\n\n"
+                except Exception:
+                    pass
+
+            enhanced_message = event_context + affinity_context + perception_context
             if memory_context:
                 enhanced_message += f"{memory_context}\n\n"
             enhanced_message += f"【当前对话】\n玩家: {message}"
@@ -407,6 +425,10 @@ class NPCAgentManager:
                 )
                 log_memory_saved(npc_name)
 
+            # ⭐ 7. 周期性记忆整合检查 (working→episodic)
+            if memory_manager:
+                self._check_and_consolidate(npc_name)
+
             log_dialogue_end()
             return response
 
@@ -420,13 +442,23 @@ class NPCAgentManager:
             # 确保恢复状态
             self.set_npc_state(npc_name, "idle")
     
-    def _build_memory_context(self, memories: List[MemoryItem]) -> str:
-        """构建记忆上下文"""
+    def _build_memory_context(self, memories: List[MemoryItem], timeline_id: str = None) -> str:
+        """构建记忆上下文（可按时间线过滤）"""
         if not memories:
             return ""
 
+        # 按 timeline_id 过滤记忆
+        filtered = memories
+        if timeline_id:
+            filtered = [
+                m for m in memories
+                if m.metadata.get("timeline_id") is None or m.metadata.get("timeline_id") == timeline_id
+            ]
+            if not filtered:
+                return ""
+
         context_parts = ["【之前的对话记忆】"]
-        for memory in memories:
+        for memory in filtered:
             # 格式化时间
             time_str = memory.timestamp.strftime("%H:%M")
             # 添加记忆内容
@@ -447,6 +479,13 @@ class NPCAgentManager:
         """保存对话到记忆系统 (包含好感度信息)"""
         current_time = datetime.now()
 
+        # 获取当前活跃时间线ID
+        timeline_id = None
+        try:
+            timeline_id = self.timeline_manager._active_timeline_id
+        except Exception:
+            pass
+
         # 获取好感度信息
         affinity = affinity_info.get("new_affinity", affinity_info.get("affinity", 50.0)) if affinity_info else 50.0
         affinity_change = affinity_info.get("change_amount", 0) if affinity_info else 0
@@ -462,9 +501,10 @@ class NPCAgentManager:
                 "player_id": player_id,
                 "session_id": player_id,
                 "timestamp": current_time.isoformat(),
-                "affinity": affinity,  # ⭐ 记录当时的好感度
-                "affinity_change": affinity_change,  # ⭐ 记录好感度变化
-                "sentiment": sentiment,  # ⭐ 记录情感倾向
+                "timeline_id": timeline_id,  # 时间线隔离
+                "affinity": affinity,  # 记录当时的好感度
+                "affinity_change": affinity_change,  # 记录好感度变化
+                "sentiment": sentiment,  # 记录情感倾向
                 "context": {
                     "interaction_type": "dialogue",
                     "npc_name": npc_name
@@ -482,8 +522,9 @@ class NPCAgentManager:
                 "player_id": player_id,
                 "session_id": player_id,
                 "timestamp": current_time.isoformat(),
-                "affinity": affinity,  # ⭐ 记录当时的好感度
-                "sentiment": sentiment,  # ⭐ 记录情感倾向
+                "timeline_id": timeline_id,  # 时间线隔离
+                "affinity": affinity,  # 记录当时的好感度
+                "sentiment": sentiment,  # 记录情感倾向
                 "context": {
                     "interaction_type": "dialogue",
                     "npc_name": npc_name
@@ -492,6 +533,28 @@ class NPCAgentManager:
         )
 
         print(f"  💾 对话已保存到{npc_name}的记忆中")
+
+    def _check_and_consolidate(self, npc_name: str):
+        """周期性整合记忆：working→episodic"""
+        memory_manager = self.memories.get(npc_name)
+        if not memory_manager:
+            return
+
+        try:
+            stats = memory_manager.get_memory_stats()
+            working_count = stats.get("memories_by_type", {}).get("working", {}).get("count", 0)
+
+            # 工作记忆 >= 7/10 时触发整合
+            if working_count >= 7:
+                consolidated = memory_manager.consolidate_memories(
+                    from_type="working",
+                    to_type="episodic",
+                    importance_threshold=0.6
+                )
+                if consolidated > 0:
+                    print(f"  🔄 {npc_name}: 整合了 {consolidated} 条记忆 (working→episodic)")
+        except Exception as e:
+            print(f"  ⚠️ {npc_name} 记忆整合检查失败: {e}")
 
     async def group_chat(self, npc_names: List[str], message: str, player_id: str = "player") -> dict:
         """群聊：同时与多个 NPC 对话（并发控制 + 部分失败容错）
