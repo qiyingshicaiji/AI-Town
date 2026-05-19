@@ -525,12 +525,22 @@ function startPolling() {
         await updateNpcStates();
         await checkProactiveMessages();
 
-        // Check NPC-NPC chats
+        // Check NPC-NPC chats (active + recently completed)
         try {
             const npcChatStatus = await fetchNpcNpcChatStatus();
             if (npcChatStatus.active_chats) {
                 for (const chat of npcChatStatus.active_chats) {
                     handleNpcNpcChat(chat);
+                }
+            }
+            // Also process recently completed chats from history (within 10s)
+            if (npcChatStatus.history) {
+                const now = Date.now();
+                for (const chat of npcChatStatus.history) {
+                    const endedAt = chat.ended_at ? new Date(chat.ended_at).getTime() : 0;
+                    if (now - endedAt < 10000) {
+                        handleNpcNpcChat(chat);
+                    }
                 }
             }
         } catch (e) { /* silent */ }

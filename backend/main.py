@@ -256,6 +256,27 @@ async def get_npc_info(npc_name: str):
 
     return npc_info
 
+@app.get("/npcs/{npc_name}/perceptions")
+async def get_npc_perceptions(npc_name: str, limit: int = 10):
+    """获取NPC的感知记忆（对环境和其他NPC的观察）"""
+    npc_mgr, state_mgr, _ = get_managers()
+
+    npc_info = npc_mgr.get_npc_info(npc_name)
+    if not npc_info:
+        raise HTTPException(status_code=404, detail=f"NPC '{npc_name}' 不存在")
+
+    perception_engine = getattr(state_mgr, 'perception_engine', None)
+    if not perception_engine:
+        return {"npc_name": npc_name, "perceptions": [], "total": 0}
+
+    observations = perception_engine.get_observations(npc_name, limit=limit)
+    return {
+        "npc_name": npc_name,
+        "perceptions": observations,
+        "total": len(observations)
+    }
+
+
 @app.get("/npcs/{npc_name}/memories")
 async def get_npc_memories(npc_name: str, limit: int = 10):
     """获取NPC的记忆列表
@@ -518,6 +539,12 @@ async def set_today_event(timeline_id: str, req: EventSetRequest):
 
     try:
         event = tm_mgr.set_today_event(timeline_id, req.content)
+        # 事件好感度：根据事件关键词自动调整NPC间好感度
+        npc_mgr, _, _ = get_managers()
+        if npc_mgr.relationship_manager:
+            npc_mgr.relationship_manager.on_timeline_event(
+                req.content, list(npc_mgr.agents.keys())
+            )
         return EventResponse(
             day=tl["current_day"],
             content=event["content"],
@@ -534,6 +561,14 @@ async def advance_timeline_day(timeline_id: str):
     _, _, tm_mgr = get_managers()
     try:
         result = tm_mgr.advance_day(timeline_id)
+        # 推进天数后，如果有事件，触发好感度变化
+        npc_mgr, _, _ = get_managers()
+        if npc_mgr.relationship_manager:
+            event_text = tm_mgr.get_event_context(timeline_id)
+            if event_text:
+                npc_mgr.relationship_manager.on_timeline_event(
+                    event_text, list(npc_mgr.agents.keys())
+                )
         return DayAdvanceResponse(**result)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

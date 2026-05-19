@@ -128,13 +128,15 @@ class SceneGenerator:
 
             aff = affinities.get(name, 50) if affinities else 50
             if aff >= 80:
-                mood = "像老朋友一样，可以很随意地说话，会主动关心对方"
+                mood = "【挚友级·好感度{:.0f}】非常热情，像对待最好的老朋友。主动关心对方，语气温暖信任，愿意分享私事。".format(aff)
             elif aff >= 60:
-                mood = "友好亲切，愿意多聊，说话比较放松"
+                mood = "【亲密级·好感度{:.0f}】友好热情，话多放松，会主动找话题和关心对方。".format(aff)
             elif aff >= 40:
-                mood = "礼貌但保持距离，正常同事交流"
+                mood = "【友好级·好感度{:.0f}】礼貌友善，保持正常同事距离，不过分热情也不冷淡。".format(aff)
+            elif aff >= 20:
+                mood = "【熟悉级·好感度{:.0f}】略显生疏，回答简洁，不太想扩展话题，保持礼貌但疏远。".format(aff)
             else:
-                mood = "客气疏离，不太想深聊，回答简洁"
+                mood = "【冷淡级·好感度{:.0f}】冷淡疏离，回答极其简短（≤10字），语气客气但想尽快结束对话。".format(aff)
 
             parts.append(f"""【{name}】
 {cp}
@@ -167,7 +169,8 @@ class SceneGenerator:
         else:
             parts.append("【当前对话】（这是对话的开头）")
 
-        # 2. 跨场景记忆：查询每个 NPC 的记忆
+        # 2. 跨场景记忆：查询每个 NPC 的记忆（按时间线过滤）
+        timeline_id = getattr(self.timeline_manager, '_active_timeline_id', None)
         memory_lines = []
         for name in npc_names:
             mem_mgr = self.npc_manager.memories.get(name)
@@ -186,6 +189,12 @@ class SceneGenerator:
                     limit=4,
                     min_importance=0.3
                 )
+                # 按时间线过滤
+                if timeline_id and memories:
+                    memories = [
+                        m for m in memories
+                        if m.metadata.get("timeline_id") is None or m.metadata.get("timeline_id") == timeline_id
+                    ]
                 if memories:
                     mem_strs = [f"  - {m.content[:100]}" for m in memories[:4]]
                     memory_lines.append(f"{name}最近的记忆:\n" + "\n".join(mem_strs))
@@ -232,6 +241,7 @@ class SceneGenerator:
         """将场景消息保存到各 NPC 的记忆中"""
         from datetime import datetime
         event = self.timeline_manager.get_event_context() or ""
+        timeline_id = getattr(self.timeline_manager, '_active_timeline_id', None)
 
         for msg in scene:
             speaker = msg.get("speaker", "")
@@ -255,6 +265,7 @@ class SceneGenerator:
                         "trigger": trigger[:50] if trigger else "",
                         "event": event,
                         "timestamp": datetime.now().isoformat(),
+                        "timeline_id": timeline_id,
                     }
                 )
             except Exception:
@@ -276,6 +287,7 @@ class SceneGenerator:
                             "context": conv_type,
                             "participants": npc_names,
                             "timestamp": datetime.now().isoformat(),
+                            "timeline_id": timeline_id,
                         }
                     )
                 except Exception:
