@@ -614,11 +614,12 @@ async def chat_scene(request: SceneRequest):
             affinities[name] = npc_mgr.relationship_manager.get_affinity(name)
 
     is_group = len(request.npc_names) > 1
+    player_message = request.message or ""
 
     async def generate():
         scene = await scene_gen.generate_scene(
             npc_names=request.npc_names,
-            trigger_message=request.message,
+            trigger_message=player_message,
             history=request.history,
             affinity_context=affinities,
             max_messages=10 if is_group else 4,
@@ -627,7 +628,50 @@ async def chat_scene(request: SceneRequest):
         for msg in scene:
             yield f"data: {json.dumps(msg, ensure_ascii=False)}\n\n"
             await _asyncio.sleep(_random.uniform(0.6, 1.3))
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+        # 好感度分析：玩家消息存在时，对每个发言NPC做情感分析
+        affinity_updates = {}
+        if player_message and npc_mgr.relationship_manager:
+            for name in request.npc_names:
+                # 收集该NPC在场景中的回复
+                npc_texts = [m.get("content", "") for m in scene if m.get("speaker") == name]
+                npc_response = " ".join(npc_texts) if npc_texts else ""
+                if not npc_response:
+                    continue
+                try:
+                    result = npc_mgr.relationship_manager.analyze_and_update_affinity(
+                        npc_name=name,
+                        player_message=player_message,
+                        npc_response=npc_response,
+                    )
+                    if result.get("changed"):
+                        affinity_updates[name] = {
+                            "affinity": result["new_affinity"],
+                            "change": result["change_amount"],
+                            "level": result.get("new_level", ""),
+                            "reason": result.get("reason", ""),
+                        }
+                except Exception:
+                    pass
+
+        # 感知引擎：其他NPC观察玩家与当前NPC的对话
+        if hasattr(npc_mgr, 'perception_engine') and npc_mgr.perception_engine:
+            for name in request.npc_names:
+                try:
+                    npc_mgr.perception_engine.observe_player_chat(name, player_message)
+                except Exception:
+                    pass
+
+        # 自主思考引擎：记录互动时间
+        state_mgr = get_state_manager()
+        if getattr(state_mgr, 'autonomous_thinker', None):
+            for name in request.npc_names:
+                try:
+                    state_mgr.autonomous_thinker.record_interaction(name)
+                except Exception:
+                    pass
+
+        yield f"data: {json.dumps({'type': 'done', 'affinity_updates': affinity_updates}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         generate(),

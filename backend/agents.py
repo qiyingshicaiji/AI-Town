@@ -429,6 +429,22 @@ class NPCAgentManager:
             if memory_manager:
                 self._check_and_consolidate(npc_name)
 
+            # ⭐ 8. 感知引擎: 其他NPC观察玩家与当前NPC的对话
+            if hasattr(self, 'perception_engine') and self.perception_engine:
+                try:
+                    self.perception_engine.observe_player_chat(npc_name, message)
+                except Exception:
+                    pass
+
+            # ⭐ 9. 记录互动时间（供自主思考引擎使用）
+            try:
+                from state_manager import get_state_manager
+                sm = get_state_manager()
+                if getattr(sm, 'autonomous_thinker', None):
+                    sm.autonomous_thinker.record_interaction(npc_name)
+            except Exception:
+                pass
+
             log_dialogue_end()
             return response
 
