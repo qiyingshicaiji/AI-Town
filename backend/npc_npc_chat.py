@@ -76,7 +76,7 @@ class NPCNPCChatEngine:
     MAX_ROUNDS = 3
     MAX_DURATION = settings.NPC_STATE_TIMEOUT_BUSY  # 60s
     COOLDOWN = 120
-    TRIGGER_PROBABILITY = 0.30
+    TRIGGER_PROBABILITY = 0.50
     AFFINITY_THRESHOLD = 50
     MAX_DAILY_CALLS = settings.NPC_NPC_CHAT_MAX_DAILY
 
@@ -136,12 +136,22 @@ class NPCNPCChatEngine:
         """
         self._reset_daily_counter()
 
+        # 清理已完成超过 15 秒的活跃对话
+        now = datetime.now()
+        stale_ids = []
+        for cid, chat in self.active_chats.items():
+            if chat.get("ended_at") and (now - chat["ended_at"]).total_seconds() > 15:
+                stale_ids.append(cid)
+        for cid in stale_ids:
+            del self.active_chats[cid]
+
         # 检查每日上限
         if self.daily_call_count >= self.MAX_DAILY_CALLS:
             return None
 
-        # 检查是否有活跃对话（同时最多 1 组）
-        if len(self.active_chats) > 0:
+        # 检查是否还有正在进行（未结束）的活跃对话
+        active_count = sum(1 for c in self.active_chats.values() if not c.get("ended_at"))
+        if active_count > 0:
             return None
 
         # 获取所有 NPC
@@ -205,8 +215,9 @@ class NPCNPCChatEngine:
             # 手动触发可以覆盖一些限制
             pass
 
-        # 检查是否有活跃对话
-        if len(self.active_chats) > 0:
+        # 检查是否有活跃（未结束的）对话
+        active_count = sum(1 for c in self.active_chats.values() if not c.get("ended_at"))
+        if active_count > 0:
             return False
 
         chat_id = uuid4().hex[:8]
@@ -246,7 +257,7 @@ class NPCNPCChatEngine:
             }]
 
         finally:
-            # 结束对话
+            # 结束对话 — 保留在 active_chats 15秒供前端轮询捕获
             chat["ended_at"] = datetime.now()
             self.chat_history.append(chat)
             if len(self.chat_history) > 200:
@@ -259,14 +270,12 @@ class NPCNPCChatEngine:
             # 设置冷却
             self._set_cooldown(npc_a, npc_b)
 
-            # 清理活跃对话
-            if chat_id in self.active_chats:
-                del self.active_chats[chat_id]
+            # ⚠️ 不立即删除 active_chats — check_and_trigger() 会清理超过15秒的已完成对话
 
         # 更新好感度
         self._update_affinity_from_chat(npc_a, npc_b, chat["messages"])
 
-        return True
+        return chat_id
 
     async def _generate_conversation(self, npc_a: str, npc_b: str) -> List[dict]:
         """生成 NPC 间对话（优先用场景生成器）"""
