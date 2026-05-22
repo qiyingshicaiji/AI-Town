@@ -53,6 +53,7 @@ class NPCStateManager:
         self.group_chat_engine = GroupChatEngine(
             npc_manager=npc_mgr, timeline_manager=tm_mgr, llm=llm
         )
+        self.group_chat_engine.scene_generator = self.scene_generator
 
         # 感知引擎
         self.perception_engine = PerceptionEngine(

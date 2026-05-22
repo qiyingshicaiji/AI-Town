@@ -9,7 +9,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Python dependencies
 COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# 先嘗試默認 PyPI（更穩定），若需鏡像可取消下行注釋並注釋上一行
+# RUN pip install --no-cache-dir -r requirements.txt
+# 國內用戶：使用清華鏡像加速（若鏡像不可用請改用默認 PyPI）
+RUN pip install --no-cache-dir --default-timeout=300 --retries 5 -r requirements.txt \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --trusted-host pypi.tuna.tsinghua.edu.cn \
+    || pip install --no-cache-dir --default-timeout=300 -r requirements.txt
 
 # Copy backend code
 COPY backend/ .

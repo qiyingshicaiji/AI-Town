@@ -569,8 +569,95 @@ class NPCAgentManager:
                 )
                 if consolidated > 0:
                     print(f"  🔄 {npc_name}: 整合了 {consolidated} 条记忆 (working→episodic)")
+                    # 低重要性記憶遺忘
+                    forgotten = memory_manager.forget_low_importance(
+                        memory_type="working",
+                        importance_threshold=0.3
+                    )
+                    if forgotten > 0:
+                        print(f"  🧹 {npc_name}: 遗忘了 {forgotten} 条低重要性工作记忆")
         except Exception as e:
             print(f"  ⚠️ {npc_name} 记忆整合检查失败: {e}")
+
+    def record_npc_speech(
+        self,
+        npc_name: str,
+        content: str,
+        listeners: List[str] = None,
+        context_type: str = "npc_npc_chat",
+        importance: float = 0.5
+    ):
+        """統一記憶寫入：NPC 發言後寫入說話者 + 聽眾的工作記憶
+
+        這是所有 NPC 發言的統一寫入點，無論是：
+        - NPC-NPC 對話
+        - 群聊搶話
+        - NPC 主動發言
+        - 與玩家的 1v1 對話（已在 chat() 中處理）
+
+        Args:
+            npc_name: 發言的 NPC 名稱
+            content: 發言內容
+            listeners: 聽眾 NPC 名稱列表（也會寫入他們的記憶）
+            context_type: 上下文類型（用於記憶 metadata）
+            importance: 記憶重要性（0-1）
+        """
+        current_time = datetime.now()
+        timeline_id = None
+        try:
+            timeline_id = self.timeline_manager._active_timeline_id
+        except Exception:
+            pass
+
+        listeners = listeners or []
+
+        # 1. 寫入說話者自己的工作記憶
+        mem_mgr = self.memories.get(npc_name)
+        if mem_mgr:
+            try:
+                mem_mgr.add_memory(
+                    content=f"我说: {content}",
+                    memory_type="working",
+                    importance=importance,
+                    metadata={
+                        "speaker": npc_name,
+                        "listeners": listeners,
+                        "context_type": context_type,
+                        "timestamp": current_time.isoformat(),
+                        "timeline_id": timeline_id,
+                    }
+                )
+            except Exception as e:
+                print(f"  ⚠️ 寫入 {npc_name} 記憶失敗: {e}")
+
+        # 2. 寫入每個聽眾的工作記憶
+        for listener in listeners:
+            if listener == npc_name:
+                continue
+            listener_mem = self.memories.get(listener)
+            if not listener_mem:
+                continue
+            try:
+                listener_mem.add_memory(
+                    content=f"{npc_name}说: {content}",
+                    memory_type="working",
+                    importance=importance,
+                    metadata={
+                        "speaker": npc_name,
+                        "listener": listener,
+                        "context_type": context_type,
+                        "timestamp": current_time.isoformat(),
+                        "timeline_id": timeline_id,
+                    }
+                )
+            except Exception as e:
+                print(f"  ⚠️ 寫入 {listener} 記憶失敗: {e}")
+
+        # 3. 檢查是否需要整合（說話者 + 聽眾）
+        self._check_and_consolidate(npc_name)
+        for listener in listeners:
+            if listener != npc_name:
+                self._check_and_consolidate(listener)
 
     async def group_chat(self, npc_names: List[str], message: str, player_id: str = "player") -> dict:
         """群聊：同时与多个 NPC 对话（并发控制 + 部分失败容错）

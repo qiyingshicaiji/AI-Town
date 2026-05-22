@@ -29,6 +29,38 @@ let currentConv = null;
 let allNpcs = [];
 let npcNpcAffinities = {};  // NPC-NPC affinity matrix
 let pollingTimer = null;
+let lastPollHadData = false;  // Track polling status
+
+// ==================== Toast Notifications ====================
+
+function showToast(title, text, type, convId) {
+    const container = document.getElementById('toastContainer');
+    if (!container) return;
+
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    const icon = type === 'npcnpc' ? '💬' : '📩';
+    toast.innerHTML = `
+        <span class="toast-icon">${icon}</span>
+        <div class="toast-body">
+            <div class="toast-title">${escapeHtml(title)}</div>
+            <div class="toast-text">${escapeHtml(text)}</div>
+        </div>`;
+
+    toast.addEventListener('click', () => {
+        if (convId) openConversation(convId);
+        toast.remove();
+    });
+
+    container.appendChild(toast);
+
+    // Auto-remove after animation
+    setTimeout(() => { if (toast.parentNode) toast.remove(); }, 5000);
+
+    // Limit to 5 toasts
+    const toasts = container.querySelectorAll('.toast');
+    if (toasts.length > 5) toasts[0].remove();
+}
 
 // ==================== Initialization ====================
 
@@ -36,6 +68,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupEventListeners();
     await refreshAllTimelineData();
     await loadNpcsAndInit();
+
+    // 加载历史 NPC 间对话（避免页面加载前触发的对话丢失）
+    try {
+        const historyData = await fetchNpcNpcChatHistory(10);
+        console.log(`📜 初始加载 NPC-NPC 历史: ${historyData.history?.length || 0} 条`);
+        if (historyData.history) {
+            for (const chat of historyData.history) {
+                console.log(`   chat: ${chat.npc_a} ↔ ${chat.npc_b}, messages=${chat.messages?.length || 0}, ended_at=${chat.ended_at}`);
+                handleNpcNpcChat(chat);
+            }
+        }
+    } catch (e) {
+        console.error('初始加载 NPC-NPC 历史失败:', e);
+    }
 
     renderConvList();
 
@@ -476,6 +522,11 @@ function parsePythonDate(s) {
 }
 
 function handleNpcNpcChat(chat) {
+    if (!chat.npc_a || !chat.npc_b) {
+        console.warn('⚠️ handleNpcNpcChat: 缺少 npc_a 或 npc_b', chat);
+        return;
+    }
+
     const convId = makeNpcNpcConvId(chat.npc_a, chat.npc_b);
     let conv = getConversation(convId);
 
@@ -484,16 +535,19 @@ function handleNpcNpcChat(chat) {
             id: convId, type: 'npcnpc',
             name: `${chat.npc_a} ↔ ${chat.npc_b}`,
             participants: [chat.npc_a, chat.npc_b],
-            lastMsg: '', lastTime: new Date().toISOString(), unread: 0
+            lastMsg: '', lastTime: '', unread: 0
         };
+        upsertConversation(conv);
+        console.log(`📝 创建 NPC-NPC 对话: ${conv.name}`);
     }
 
-    // 去重：获取已有消息用于比较
+    // 去重
     const existing = loadMessages(convId) || [];
     const existingKeys = new Set(existing.map(m => `${m.sender}::${m.content}`));
 
     let newCount = 0;
     for (const msg of chat.messages || []) {
+        if (!msg.speaker || !msg.content) continue;
         const dedupeKey = `${msg.speaker}::${msg.content}`;
         if (existingKeys.has(dedupeKey)) continue;
         existingKeys.add(dedupeKey);
@@ -501,19 +555,26 @@ function handleNpcNpcChat(chat) {
 
         const storedMsg = { sender: msg.speaker, content: msg.content, time: new Date().toISOString() };
         appendMessage(convId, storedMsg);
-        conv.lastMsg = (msg.content || '').substring(0, 40);
-        conv.lastTime = new Date().toISOString();
-        conv.unread = convId === currentConvId ? 0 : (conv.unread || 0) + 1;
     }
 
     if (newCount > 0) {
         console.log(`💬 NPC间对话 [${chat.npc_a} ↔ ${chat.npc_b}]: +${newCount} 条新消息 (chat_id=${chat.id})`);
+        // Show toast notification
+        const lastMsg = chat.messages && chat.messages.length > 0
+            ? chat.messages[chat.messages.length - 1].content : '';
+        showToast(
+            `NPC 对话: ${chat.npc_a} ↔ ${chat.npc_b}`,
+            lastMsg || `${newCount} 条新消息`,
+            'npcnpc',
+            convId
+        );
+        // 当前正在查看的对话不计入未读
+        if (convId === currentConvId) markRead(convId);
     }
 
-    upsertConversation(conv);
     renderConvList();
 
-    // Refresh messages if currently viewing this conversation
+    // 如果正在查看该对话，刷新显示
     if (currentConvId === convId) {
         renderMessages(loadMessages(convId));
     }
@@ -524,18 +585,22 @@ function handleNpcNpcChat(chat) {
 async function checkProactiveMessages() {
     try {
         const data = await apiRequest('GET', '/npcs/pending-messages', null, { useCache: false });
-        if (!data.messages || data.messages.length === 0) return;
+        if (!data.messages || data.messages.length === 0) return 0;
 
         console.log(`📩 收到 ${data.messages.length} 条 NPC 主动消息:`, data.messages.map(m => `${m.npc_name}: ${m.content?.substring(0, 20)}`));
 
+        const processedKeys = [];
+
         for (const msg of data.messages) {
             const convId = make1v1ConvId(msg.npc_name);
+            const msgKey = `${msg.npc_name}::${msg.timestamp}`;
+            processedKeys.push(msgKey);
 
             // 去重：检查是否已有相同时间戳和内容的消息
             const existing = loadMessages(convId) || [];
             if (existing.some(m => m.content === msg.content && m.time === msg.timestamp)) continue;
 
-            // 先确保 conversation 存在（appendMessage 内部依赖 conv 已存在才能更新 preview）
+            // 先确保 conversation 存在
             if (!getConversation(convId)) {
                 upsertConversation({
                     id: convId, type: '1v1', name: msg.npc_name,
@@ -547,13 +612,23 @@ async function checkProactiveMessages() {
             const storedMsg = { sender: msg.npc_name, content: msg.content, time: msg.timestamp || new Date().toISOString() };
             appendMessage(convId, storedMsg);
 
+            // Show toast for each proactive message
+            showToast(
+                `${msg.npc_name} 主动发来消息`,
+                (msg.content || '').substring(0, 60),
+                'proactive',
+                convId
+            );
+
             // 当前正在查看的对话不计入未读
             if (convId === currentConvId) markRead(convId);
         }
 
-        // 确认已处理，清空服务端队列
+        // ACK — 只确认已处理的具体消息，避免误删新消息
         try {
-            await apiRequest('POST', '/npcs/pending-messages/ack', null, { useCache: false });
+            await apiRequest('POST', '/npcs/pending-messages/ack', {
+                message_keys: processedKeys
+            }, { useCache: false });
         } catch (e) {
             console.warn('ACK 失败，消息将在下次轮询重试:', e);
         }
@@ -562,7 +637,9 @@ async function checkProactiveMessages() {
         if (currentConvId && getConversation(currentConvId)) {
             renderMessages(loadMessages(currentConvId));
         }
+        return data.messages.length;
     } catch (e) { console.error('checkProactiveMessages failed:', e); }
+    return 0;
 }
 
 // ==================== Polling ====================
@@ -583,11 +660,13 @@ async function updateNpcStates() {
 let lastAffinityRefresh = 0;
 
 function startPolling() {
-    if (pollingTimer) clearTimeout(pollingTimer);
+    if (pollingTimer) { clearTimeout(pollingTimer); pollingTimer = null; }
 
     async function tick() {
+        let pollHadData = false;
         await updateNpcStates();
-        await checkProactiveMessages();
+        const proactiveCount = await checkProactiveMessages();
+        if (proactiveCount > 0) pollHadData = true;
 
         // 定期刷新好感度（每 30 秒）
         if (Date.now() - lastAffinityRefresh > 30000) {
@@ -618,26 +697,37 @@ function startPolling() {
         // Check NPC-NPC chats (active + recently completed)
         try {
             const npcChatStatus = await fetchNpcNpcChatStatus();
+            const activeCount = npcChatStatus.active_chats?.length || 0;
+            const historyCount = npcChatStatus.history?.length || 0;
+            if (activeCount > 0 || historyCount > 0) {
+                console.log(`🔍 轮询 NPC-NPC: active=${activeCount}, history=${historyCount}`);
+                pollHadData = true;
+            }
             if (npcChatStatus.active_chats) {
                 for (const chat of npcChatStatus.active_chats) {
+                    console.log(`   active chat: ${chat.npc_a} ↔ ${chat.npc_b}, msgs=${chat.messages?.length || 0}, ended=${chat.ended_at || '(未结束)'}`);
                     handleNpcNpcChat(chat);
                 }
             }
-            // Also process recently completed chats from history (within 15s)
+            // Also process recently completed chats from history (within 60s)
             if (npcChatStatus.history) {
                 const now = Date.now();
                 for (const chat of npcChatStatus.history) {
                     const endedAt = parsePythonDate(chat.ended_at);
-                    if (endedAt && (now - endedAt) < 15000) {
+                    const age = endedAt ? Math.round((now - endedAt) / 1000) : 999;
+                    if (endedAt && (now - endedAt) < 60000) {
+                        console.log(`   history chat: ${chat.npc_a} ↔ ${chat.npc_b}, msgs=${chat.messages?.length || 0}, age=${age}s`);
                         handleNpcNpcChat(chat);
                     }
                 }
             }
         } catch (e) { console.error('NPC chat check failed:', e); }
 
+        updatePollIndicator(pollHadData);
+
         renderConvList();
 
-        if (pollingTimer) pollingTimer = setTimeout(tick, 5000);
+        pollingTimer = setTimeout(tick, 5000);
     }
 
     tick();
@@ -674,6 +764,25 @@ function setConnectionStatus(connected) {
     STATE.connected = connected;
     connectionStatus.className = 'status-dot ' + (connected ? 'online' : 'offline');
     connectionText.textContent = connected ? `已连接 (${API_BASE})` : '断开';
+}
+
+function updatePollIndicator(hadData) {
+    const dot = document.getElementById('pollDot');
+    const label = document.getElementById('pollLabel');
+    const indicator = document.getElementById('pollIndicator');
+    if (!dot || !label || !indicator) return;
+    if (hadData) {
+        dot.classList.add('active');
+        indicator.classList.add('active');
+        label.textContent = '有数据';
+        lastPollHadData = true;
+    } else {
+        dot.classList.remove('active');
+        indicator.classList.remove('active');
+        if (lastPollHadData) {
+            label.textContent = '等待中...';
+        }
+    }
 }
 
 // ==================== Helpers ====================

@@ -162,3 +162,21 @@ class NPCNPCChatStatusResponse(BaseModel):
     history: List[NPCNPCChatRecord] = Field(default_factory=list, description="历史对话")
     cooldowns: Dict[str, int] = Field(default_factory=dict, description="冷却剩余秒数")
 
+
+class PendingMessage(BaseModel):
+    """待处理的主动消息"""
+    npc_name: str = Field(..., description="NPC名称")
+    content: str = Field(..., description="消息内容")
+    timestamp: str = Field(..., description="时间戳")
+
+
+class PendingMessagesResponse(BaseModel):
+    """待处理消息响应"""
+    messages: List[dict] = Field(default_factory=list, description="待处理消息列表")
+
+
+class AckPendingRequest(BaseModel):
+    """确认处理消息请求"""
+    npc_name: Optional[str] = Field(None, description="如果指定，仅确认该NPC的消息")
+    message_keys: Optional[List[str]] = Field(None, description="要确认的特定消息key列表")
+

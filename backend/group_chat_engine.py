@@ -24,7 +24,12 @@ class GroupChatEngine:
         self.npc_manager = npc_manager
         self.timeline_manager = timeline_manager
         self.llm = llm
-        print("🎯 群聊抢话引擎 v2 已初始化 (启发式意愿 + 流式返回)")
+        self.scene_generator = None  # 由 state_manager 注入
+
+        # ✅ 最近一场抢话的完整记录（用于连续性上下文）
+        self._last_contention: Optional[List[dict]] = None
+
+        print("🎯 群聊抢话引擎 v3 已初始化 (統ㄧ記憶寫入 + 内容去重)")
 
     # ==================== Streaming API ====================
 
@@ -85,6 +90,8 @@ class GroupChatEngine:
             await asyncio.sleep(0.3)
 
         yield {"type": "done", "reason": "达到最大轮次" if len(rounds) >= max_r else "对话结束", "rounds": rounds}
+        # ✅ 记录本场抢话，供下次使用做连续性参考
+        self._record_contention_session(rounds)
 
     # ==================== Non-streaming (backward compat) ====================
 
@@ -144,8 +151,8 @@ class GroupChatEngine:
         if event and npc_name in event:
             score += 3
 
-        # 因素6: 随机因子 (模拟真实对话的不确定性)
-        score += random.randint(-1, 2)
+        # 因素6: 随机因子 (模拟真实对话的不确定性，扩大范围避免总是同一人发言)
+        score += random.randint(-3, 5)
 
         return max(0, min(10, score))
 
@@ -165,36 +172,132 @@ class GroupChatEngine:
     # ==================== Speech Generation ====================
 
     async def _generate_speech_fast(self, npc_name, context, history):
+        """生成单个 NPC 的抢话发言（v3：含记忆检索 + 个性化 + 去重）"""
         info = self.npc_manager.get_npc_info(npc_name)
         if not info:
             return None
 
+        # 1. 今日事件
         event = self.timeline_manager.get_event_context()
-        event_text = f"今日事件: {event}\n" if event else ""
+        event_text = f"【今日事件】{event}\n" if event else ""
 
-        # 构建简洁 prompt
+        # 2. 最近发言上下文（当前抢话轮次）
         recent = ""
         if history:
-            recent = "最近发言:\n" + "\n".join(
-                f"  {r['speaker']}: {r['content']}" for r in history[-3:]
+            recent = "【当前群聊记录】\n" + "\n".join(
+                f"  {r['speaker']}: {r['content']}" for r in history[-10:]
             ) + "\n"
 
-        prompt = f"""{event_text}{recent}
-你是{npc_name}（{info.get('title', '')}），性格{info.get('personality', '')}。
-对群聊话题说一句自然的发言（20-40字），不要引号："""
+        # 3. ✅ 记忆检索：查该 NPC 关于当前话题和其他参与者的记忆
+        memory_text = ""
+        try:
+            mem_mgr = self.npc_manager.memories.get(npc_name)
+            if mem_mgr:
+                # 从当前上下文提取查询关键词
+                query_words = []
+                if history:
+                    for h in history[-3:]:
+                        query_words.append(h.get("content", "")[:40])
+                query = " ".join(query_words) if query_words else ""
+                memories = mem_mgr.retrieve_memories(
+                    query=query,
+                    memory_types=["working", "episodic"],
+                    limit=4,
+                    min_importance=0.2
+                )
+                if memories:
+                    mem_lines = [f"  - {m.content[:100]}" for m in memories]
+                    memory_text = "【你的相关记忆 — 可以自然地提及或延续这些内容】\n" + "\n".join(mem_lines) + "\n"
+        except Exception:
+            pass
+
+        # 4. ✅ 人格上下文
+        from agents import NPC_ROLES
+        full_role = NPC_ROLES.get(npc_name, {})
+        personality = full_role.get("core_personality", info.get("personality", ""))
+        speak_style = full_role.get("speaking_style", "")
+        quirks = full_role.get("quirks", [])
+
+        personality_text = f"【你的性格】{personality}\n【说话风格】{speak_style}"
+        if quirks:
+            personality_text += f"\n【小习惯】{'; '.join(quirks[:3])}"
+
+        # 5. ✅ 去重：從記憶系統中檢索該 NPC 最近的發言（而非手動維護 history）
+        anti_repeat = ""
+        try:
+            mem_mgr = self.npc_manager.memories.get(npc_name)
+            if mem_mgr:
+                # 檢索最近關於「我說」的工作記憶
+                recent_speeches = mem_mgr.retrieve_memories(
+                    query="我说",
+                    memory_types=["working"],
+                    limit=5,
+                    min_importance=0.1
+                )
+                if recent_speeches:
+                    speech_lines = [f"  - {m.content[:80]}" for m in recent_speeches[:3]]
+                    anti_repeat = "【⚠️ 你最近的发言 — 避免重复说过的话】\n" + "\n".join(speech_lines) + "\n"
+        except Exception:
+            pass
+
+        # 6. ✅ 上次抢话记录（连续性）
+        last_session = ""
+        if self._last_contention:
+            last_lines = []
+            for r in self._last_contention[-4:]:  # 最近 4 条
+                last_lines.append(f"  {r['speaker']}: {r['content']}")
+            if last_lines:
+                last_session = "【上次群聊的结尾 — 可以自然延续或提及，像真人聚会一样】\n" + "\n".join(last_lines) + "\n"
+
+        # 构建 prompt
+        prompt = f"""{event_text}{last_session}{memory_text}{personality_text}
+
+{recent}{anti_repeat}
+请用你的性格和风格，说一句自然的发言（20-40字）。
+不要重复自己或他人已经说过的话，每次发言要有新观点或新角度。
+如果记忆中有相关的内容，可以自然地提及——像真人聊天一样。
+不要引号，直接用日常聊天语气："""
 
         if self.llm:
             try:
-                from hello_agents import SimpleAgent
-                agent = SimpleAgent(
-                    name=f"Speaker_{npc_name}", llm=self.llm,
-                    system_prompt="你是群聊参与者。根据上下文说一句自然的发言，20-40字，不要引号。"
-                )
-                response = agent.run(prompt)
+                # 复用持久化 Agent（包含完整角色系统提示词 + 记忆）
+                agent = self.npc_manager.agents.get(npc_name)
+                if agent:
+                    response = await asyncio.to_thread(agent.run, prompt, temperature=1.0)
+                else:
+                    from hello_agents import SimpleAgent
+                    agent = SimpleAgent(
+                        name=f"Speaker_{npc_name}", llm=self.llm,
+                        system_prompt="你是群聊参与者。根据上下文说一句自然的发言，20-40字。不要重复已说过的话，每次发言要有新内容。"
+                    )
+                    response = agent.run(prompt)
                 content = response.strip()
                 content = re.sub(r'^["\'\`＂＇]|["\'\`＂＇]$', '', content)
                 content = re.sub(r'^(我说的?[:：]?\s*)|(我说[:：]?\s*)', '', content)
-                return content[:100] or f"嗯，有道理。"
+                content = content[:100] or f"嗯，有道理。"
+
+                # ✅ 去重检查：与记忆中最近发言的 Jaccard 相似度
+                if self._is_speech_duplicate(npc_name, content):
+                    print(f"  🚫 抢话去重 [{npc_name}]: 与最近发言高度相似，跳过")
+                    fallback = self._get_fallback_speech(npc_name, info, history)
+                    if fallback and not self._is_speech_duplicate(npc_name, fallback):
+                        content = fallback
+                        print(f"     → 使用备选发言")
+                    else:
+                        return None
+
+                # ✅ 統ㄧ記憶寫入：發言寫入說話者 + 其他 NPC 聽眾的工作記憶
+                if content:
+                    listeners = [n for n in self.npc_manager.agents.keys() if n != npc_name]
+                    self.npc_manager.record_npc_speech(
+                        npc_name=npc_name,
+                        content=content,
+                        listeners=listeners,
+                        context_type="群聊抢话",
+                        importance=0.5
+                    )
+
+                return content
             except Exception as e:
                 print(f"  ⚠️  {npc_name} 发言生成失败: {e}")
 
@@ -202,3 +305,59 @@ class GroupChatEngine:
             "嗯，我觉得有道理。", "是的，我也是这么想的。",
             "这个话题挺有意思的。", f"从{info.get('title', '')}的角度看，确实如此。",
         ])
+
+    def _is_speech_duplicate(self, npc_name: str, new_content: str) -> bool:
+        """檢查新發言是否與記憶中最近的發言高度重複"""
+        try:
+            mem_mgr = self.npc_manager.memories.get(npc_name)
+            if not mem_mgr:
+                return False
+            recent = mem_mgr.retrieve_memories(
+                query="我说",
+                memory_types=["working"],
+                limit=5,
+                min_importance=0.1
+            )
+            for mem in recent:
+                # 從記憶內容中提取實際發言文字
+                old_content = mem.content
+                # 移除 "我说: " 前綴
+                if old_content.startswith("我说: "):
+                    old_content = old_content[4:]
+                if self._jaccard_similarity(old_content, new_content) > 0.55:
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def _jaccard_similarity(self, text_a: str, text_b: str) -> float:
+        """2-gram Jaccard 相似度"""
+        def get_2grams(s):
+            return set(s[i:i+2] for i in range(len(s)-1))
+        grams_a = get_2grams(text_a)
+        grams_b = get_2grams(text_b)
+        if not grams_a or not grams_b:
+            return 0.0
+        intersection = grams_a & grams_b
+        union = grams_a | grams_b
+        return len(intersection) / len(union) if union else 0.0
+
+    def _get_fallback_speech(self, npc_name: str, info: dict, history: list) -> str:
+        """生成备用发言（不使用 LLM）"""
+        if history:
+            templates = [
+                "嗯，有道理。",
+                "我觉得也是。",
+                f"从{info.get('title', '')}的角度来看，确实如此。",
+                "这个话题挺有意思的。",
+                "对，我同意这个观点。",
+            ]
+            return random.choice(templates)
+        return random.choice([
+            "大家说得对。", "确实。", "我也有同感。",
+        ])
+
+    def _record_contention_session(self, rounds: List[dict]):
+        """记录整场抢话，供下次抢话作为连续性参考"""
+        if rounds:
+            self._last_contention = list(rounds)  # 深拷贝
