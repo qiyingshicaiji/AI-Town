@@ -12,7 +12,10 @@
       "PowerShell(python -c \"import hello_agents; print\\(hello_agents.__file__\\)\" 2>&1)",
       "PowerShell(Get-ChildItem \"C:\\\\Users\\\\colorful\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python314\\\\Lib\\\\site-packages\\\\hello_agents\\\\memory\" | ForEach-Object { $_.FullName })",
       "PowerShell(python -c \"import py_compile; py_compile.compile\\('backend/npc_npc_chat.py', doraise=True\\); py_compile.compile\\('backend/autonomous_thinker.py', doraise=True\\); py_compile.compile\\('backend/relationship_manager.py', doraise=True\\); py_compile.compile\\('backend/main.py', doraise=True\\); print\\('All Python files OK'\\)\")",
-      "PowerShell(node -e \"require\\('fs'\\).readFileSync\\('frontend/js/app.js','utf8'\\); console.log\\('JS file readable, no syntax check available but edits applied cleanly'\\)\")"
+      "PowerShell(node -e \"require\\('fs'\\).readFileSync\\('frontend/js/app.js','utf8'\\); console.log\\('JS file readable, no syntax check available but edits applied cleanly'\\)\")",
+      "PowerShell(python -c \"import hello_agents; print\\(hello_agents.__file__\\)\" 2>$null)",
+      "PowerShell(Get-ChildItem -Path \"E:\\\\agent_test\\\\AI-Town\\\\hello-agents\\\\code\\\\chapter15\\\\Helloagents-AI-Town\" -Recurse -Filter \"hello_agents\" -Directory -ErrorAction SilentlyContinue | Select-Object -First 10 | ForEach-Object { $_.FullName })",
+      "PowerShell(python -c \"import sys; sys.path.insert\\(0, 'HelloAgents'\\); import hello_agents; print\\(hello_agents.__file__\\)\" 2>$null)"
     ]
   }
 }

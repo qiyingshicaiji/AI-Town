@@ -36,6 +36,7 @@ class SceneGenerator:
         max_messages: int = 8,
         is_group: bool = False,
         is_npc_npc: bool = False,
+        extra_context: str = "",
     ) -> List[dict]:
         """生成对话场景
 
@@ -51,7 +52,12 @@ class SceneGenerator:
         roles_text = self._build_roles_text(npc_names, affinity_context)
 
         # 构建历史（含跨场景记忆查询）
-        history_text = await self._build_history_text(npc_names, history)
+        # ✅ 传入 is_npc_npc 和 extra_context，确保 NPC-NPC 场景能检索到相关记忆
+        history_text = await self._build_history_text(
+            npc_names, history,
+            is_npc_npc=is_npc_npc,
+            extra_context=extra_context
+        )
 
         # 构建规则
         rules = self._build_rules(npc_names, is_group, is_npc_npc, trigger_message, max_messages)
@@ -64,6 +70,9 @@ class SceneGenerator:
         else:
             trigger_text = "【场景】角色们正在办公室闲聊。"
 
+        # 额外上下文（如最近对话历史，用于避免重复）
+        extra_text = f"\n{extra_context}" if extra_context else ""
+
         prompt = f"""你是一个对话生成器。根据角色和背景，生成一段自然的聊天对话。
 
 {roles_text}
@@ -71,7 +80,7 @@ class SceneGenerator:
 【今日事件】{event_text}
 
 {history_text}
-
+{extra_text}
 {trigger_text}
 
 {rules}
@@ -153,7 +162,7 @@ class SceneGenerator:
 
         return "\n---\n".join(parts)
 
-    async def _build_history_text(self, npc_names, history):
+    async def _build_history_text(self, npc_names, history, is_npc_npc=False, extra_context=""):
         """构建上下文 — 当前对话历史 + 跨场景记忆"""
         parts = []
 
@@ -178,16 +187,26 @@ class SceneGenerator:
                 continue
             try:
                 # 构建查询文本
-                query_parts = []
-                if history:
-                    query_parts.extend(h.get("content", "") for h in history[-3:])
-                query = " ".join(query_parts) if query_parts else ""
+                # ✅ 核心修复：NPC-NPC 对话时，用对方名字作为查询词
+                if is_npc_npc and len(npc_names) >= 2:
+                    # 找到「对方」的名字
+                    other_name = npc_names[0] if name == npc_names[1] else npc_names[1]
+                    query = f"{other_name} 对话 聊天 讨论"
+                elif history:
+                    query_parts = [h.get("content", "") for h in history[-3:]]
+                    query = " ".join(query_parts)
+                else:
+                    query = ""
+
+                # NPC-NPC 对话需要更积极的记忆检索
+                mem_limit = 6 if is_npc_npc else 4
+                mem_threshold = 0.2 if is_npc_npc else 0.3
 
                 memories = mem_mgr.retrieve_memories(
                     query=query,
                     memory_types=["working", "episodic"],
-                    limit=4,
-                    min_importance=0.3
+                    limit=mem_limit,
+                    min_importance=mem_threshold
                 )
                 # 按时间线过滤
                 if timeline_id and memories:
@@ -196,13 +215,17 @@ class SceneGenerator:
                         if m.metadata.get("timeline_id") is None or m.metadata.get("timeline_id") == timeline_id
                     ]
                 if memories:
-                    mem_strs = [f"  - {m.content[:100]}" for m in memories[:4]]
-                    memory_lines.append(f"{name}最近的记忆:\n" + "\n".join(mem_strs))
+                    mem_strs = [f"  - {m.content[:120]}" for m in memories[:mem_limit]]
+                    memory_lines.append(f"{name}的相关记忆:\n" + "\n".join(mem_strs))
             except Exception as e:
                 pass  # 记忆查询失败不影响对话生成
 
         if memory_lines:
-            parts.append("【跨场景记忆】\n" + "\n".join(memory_lines))
+            parts.append("【跨场景记忆 — 基于以下记忆自然延续对话，像真人一样提及过去的事】\n" + "\n".join(memory_lines))
+
+        # 3. ✅ 额外上下文（如最近对话历史、去重提示等）
+        if extra_context:
+            parts.append(extra_context)
 
         return "\n\n".join(parts)
 
@@ -210,12 +233,23 @@ class SceneGenerator:
         """构建规则 — 性格驱动"""
         if is_npc_npc:
             char_rule = f"只有{npc_names[0]}和{npc_names[1]}两人对话"
+            # ✅ NPC-NPC 对话连续性指导
+            continuity_rule = (
+                "如果「跨场景记忆」或「上一次对话」中有两人之前的互动内容，"
+                "请自然地延续或提及之前的话题，就像真人同事之间的日常聊天一样——"
+                "可以接着上次没说完的话继续，也可以基于记忆里的内容发展新话题。"
+                "对话应该有「时间感」：上次聊过的这次可以追问进展、补充细节、或者岔开到相关话题。"
+            )
         elif is_group or len(npc_names) > 1:
             char_rule = f"参与: {'、'.join(npc_names)}。感兴趣的多说，不感兴趣的少说或不说。可以连续发2-3条"
+            continuity_rule = ""
         else:
             char_rule = f"只有{npc_names[0]}说话。如果话题让其兴奋，可以连续发2-3条消息"
+            continuity_rule = ""
 
         trigger_rule = "需要先回应玩家的消息，然后自然展开对话" if trigger else "角色们自由展开闲聊"
+
+        continuity_section = f"\n11. {continuity_rule}" if continuity_rule else ""
 
         return f"""【规则】
 1. {char_rule}
@@ -227,7 +261,7 @@ class SceneGenerator:
 7. 过往记忆会被不经意提起——像真人的回忆那样自然
 8. 每句话15-40字，微信聊天风格，口语化
 9. {trigger_rule}
-10. 总共约{max_messages}条消息"""
+10. 总共约{max_messages}条消息{continuity_section}"""
 
     def _get_evolution_text(self, npc_name):
         if not self.evolution:
@@ -238,10 +272,9 @@ class SceneGenerator:
     # ==================== Memory Saving ====================
 
     def _save_scene_to_memory(self, scene: List[dict], npc_names: List[str], trigger: str, conv_type: str):
-        """将场景消息保存到各 NPC 的记忆中"""
-        from datetime import datetime
-        event = self.timeline_manager.get_event_context() or ""
-        timeline_id = getattr(self.timeline_manager, '_active_timeline_id', None)
+        """將場景消息通過統一的 record_npc_speech() 寫入記憶系統"""
+        # 確定聽眾列表（場景中的所有 NPC 都是聽眾）
+        all_listeners = list(npc_names)
 
         for msg in scene:
             speaker = msg.get("speaker", "")
@@ -249,30 +282,23 @@ class SceneGenerator:
             if not speaker or speaker not in npc_names:
                 continue
 
-            mem_mgr = self.npc_manager.memories.get(speaker)
-            if not mem_mgr:
-                continue
+            # 說話者以外的 NPC 都是聽眾
+            listeners = [n for n in all_listeners if n != speaker]
 
-            try:
-                mem_mgr.add_memory(
-                    content=f"{speaker}在{conv_type}中说: {content}",
-                    memory_type="working",
-                    importance=0.5,
-                    metadata={
-                        "speaker": speaker,
-                        "context": conv_type,
-                        "participants": npc_names,
-                        "trigger": trigger[:50] if trigger else "",
-                        "event": event,
-                        "timestamp": datetime.now().isoformat(),
-                        "timeline_id": timeline_id,
-                    }
-                )
-            except Exception:
-                pass
+            # ✅ 使用統一的記憶寫入入口
+            imp = 0.7 if conv_type == "NPC间对话" else 0.5
+            self.npc_manager.record_npc_speech(
+                npc_name=speaker,
+                content=content,
+                listeners=listeners,
+                context_type=conv_type,
+                importance=imp
+            )
 
-        # 玩家消息也保存到所有 NPC 的记忆中
+        # 玩家消息也保存到所有參與 NPC 的記憶中
         if trigger:
+            current_time = __import__('datetime').datetime.now()
+            timeline_id = getattr(self.timeline_manager, '_active_timeline_id', None)
             for name in npc_names:
                 mem_mgr = self.npc_manager.memories.get(name)
                 if not mem_mgr:
@@ -286,12 +312,15 @@ class SceneGenerator:
                             "speaker": "玩家",
                             "context": conv_type,
                             "participants": npc_names,
-                            "timestamp": datetime.now().isoformat(),
+                            "timestamp": current_time.isoformat(),
                             "timeline_id": timeline_id,
                         }
                     )
                 except Exception:
                     pass
+            # 觸發整合檢查
+            for name in npc_names:
+                self.npc_manager._check_and_consolidate(name)
 
     # ==================== JSON Parser ====================
 

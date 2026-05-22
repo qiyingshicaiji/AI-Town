@@ -68,10 +68,12 @@ function appendMessage(convId, message) {
     // Update last message in conversation list
     const conv = getConversation(convId);
     if (conv) {
-        conv.lastMsg = message.content ? message.content.substring(0, 50) : '';
+        conv.lastMsg = (message.content || '').substring(0, 50);
         conv.lastTime = message.time || new Date().toISOString();
         conv.unread = (conv.unread || 0) + 1;
         upsertConversation(conv);
+    } else {
+        console.warn(`appendMessage: conversation ${convId} not found in list`);
     }
     return msgs;
 }

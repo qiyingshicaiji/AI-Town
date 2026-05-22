@@ -24,6 +24,10 @@
         <div class="top-bar-right">
             <span id="connectionStatus" class="status-dot offline"></span>
             <span id="connectionText">连接中...</span>
+            <span class="poll-indicator" id="pollIndicator" title="轮询状态">
+                <span class="poll-dot" id="pollDot"></span>
+                <span id="pollLabel">等待数据</span>
+            </span>
         </div>
     </header>
 
@@ -123,6 +127,9 @@
         </div>
     </div>
 
+    <!-- Toast 通知容器 -->
+    <div class="toast-container" id="toastContainer"></div>
+
     <!-- 推进确认对话框 -->
     <div class="modal-overlay" id="advanceModal" style="display:none;">
         <div class="modal">
@@ -136,10 +143,10 @@
         </div>
     </div>
 
-    <script src="js/state.js?v=2"></script>
-    <script src="js/api.js?v=2"></script>
-    <script src="js/storage.js?v=2"></script>
-    <script src="js/app.js?v=2"></script>
-    <script src="js/god.js?v=2"></script>
+    <script src="js/state.js?v=3"></script>
+    <script src="js/api.js?v=3"></script>
+    <script src="js/storage.js?v=3"></script>
+    <script src="js/app.js?v=3"></script>
+    <script src="js/god.js?v=3"></script>
 </body>
 </html>

@@ -24,7 +24,9 @@ from models import (
     # 群聊
     GroupChatRequest, GroupChatResponse,
     # NPC 间聊天
-    NPCNPCChatRecord, NPCNPCChatStatusResponse
+    NPCNPCChatRecord, NPCNPCChatStatusResponse,
+    # 主动消息
+    PendingMessagesResponse, AckPendingRequest
 )
 from agents import get_npc_manager
 from state_manager import get_state_manager
@@ -221,24 +223,31 @@ async def get_npc_npc_affinities():
 
 # ⚠️ 通配路由 /npcs/{npc_name} 必须在所有具体路由之后
 
-@app.get("/npcs/pending-messages")
+@app.get("/npcs/pending-messages", response_model=PendingMessagesResponse)
 async def get_pending_messages(npc_name: str = None):
     """获取 NPC 主动发起的待处理消息"""
     _, state_mgr, _ = get_managers()
     thinker = getattr(state_mgr, 'autonomous_thinker', None)
     if not thinker:
-        return {"messages": []}
+        return PendingMessagesResponse(messages=[])
     msgs = thinker.get_pending(npc_name)
-    return {"messages": msgs}
+    return PendingMessagesResponse(messages=msgs)
 
 @app.post("/npcs/pending-messages/ack")
-async def ack_pending_messages(npc_name: str = None):
-    """前端确认已处理待发送消息"""
+async def ack_pending_messages(req: AckPendingRequest = None):
+    """前端确认已处理待发送消息（支持指定消息 key 避免误删新消息）
+
+    Body:
+        npc_name: 如果指定，仅确认该 NPC 的消息
+        message_keys: 要确认的具体消息 key 列表（格式: "npc_name::timestamp"）
+    """
     _, state_mgr, _ = get_managers()
     thinker = getattr(state_mgr, 'autonomous_thinker', None)
     if not thinker:
         return {"ack": False}
-    thinker.ack_pending(npc_name)
+    npc_name = req.npc_name if req else None
+    message_keys = req.message_keys if req else None
+    thinker.ack_pending(npc_name, message_keys)
     return {"ack": True}
 
 @app.get("/npcs/{npc_name}")
@@ -795,7 +804,23 @@ async def get_npc_npc_chat_history(limit: int = Query(default=50, le=100)):
     chat_engine = getattr(state_mgr, 'npc_chat_engine', None)
     if not chat_engine:
         return {"history": []}
-    return {"history": chat_engine.chat_history[-limit:]}
+
+    # 使用与 /status 相同的序列化方式，确保 datetime 正确转换
+    from datetime import datetime as dt
+    serialized = []
+    for chat in chat_engine.chat_history[-limit:]:
+        started = chat.get("started_at", "")
+        ended = chat.get("ended_at", "")
+        serialized.append({
+            "id": chat.get("id", ""),
+            "npc_a": chat.get("npc_a", ""),
+            "npc_b": chat.get("npc_b", ""),
+            "messages": chat.get("messages", []),
+            "started_at": started.isoformat() if hasattr(started, 'isoformat') else str(started),
+            "ended_at": ended.isoformat() if hasattr(ended, 'isoformat') else (str(ended) if ended else ""),
+            "trigger_reason": chat.get("trigger_reason", "auto"),
+        })
+    return {"history": serialized}
 
 
 @app.post("/npc-npc-chat/trigger")
