@@ -23,12 +23,12 @@ class RelationshipManager:
     
     def __init__(self, llm: HelloAgentsLLM):
         """初始化好感度管理器
-        
+
         Args:
             llm: HelloAgentsLLM实例
         """
         self.llm = llm
-        
+
         # 存储每个NPC与玩家的好感度
         # 格式: {npc_name: {player_id: affinity_score}}
         self.affinity_scores: Dict[str, Dict[str, float]] = {}
@@ -36,6 +36,9 @@ class RelationshipManager:
         # ⭐ NPC 间好感度矩阵（对称矩阵）
         # 格式: {"张三": {"李四": 30.0, "王五": 30.0}, "李四": {"王五": 30.0}}
         self.npc_npc_affinity: Dict[str, Dict[str, float]] = {}
+
+        # 从磁盘加载持久化的好感度
+        self._load_from_disk()
 
         # 创建好感度分析Agent
         self.analyzer_agent = SimpleAgent(
@@ -126,7 +129,7 @@ NPC: "当然可以!我很乐意分享。"
     
     def set_affinity(self, npc_name: str, affinity: float, player_id: str = "player"):
         """设置好感度
-        
+
         Args:
             npc_name: NPC名称
             affinity: 好感度值 (0-100)
@@ -134,10 +137,11 @@ NPC: "当然可以!我很乐意分享。"
         """
         if npc_name not in self.affinity_scores:
             self.affinity_scores[npc_name] = {}
-        
+
         # 限制在0-100范围内
         affinity = max(0.0, min(100.0, affinity))
         self.affinity_scores[npc_name][player_id] = affinity
+        self._save_to_disk()
     
     def analyze_and_update_affinity(
         self,
@@ -325,7 +329,7 @@ NPC: "当然可以!我很乐意分享。"
         if outer not in self.npc_npc_affinity:
             self.npc_npc_affinity[outer] = {}
         if inner not in self.npc_npc_affinity[outer]:
-            self.npc_npc_affinity[outer][inner] = 45.0  # 初始好感度 45
+            self.npc_npc_affinity[outer][inner] = 55.0  # 初始好感度 55（需 >= 触发阈值 50）
 
         return self.npc_npc_affinity[outer][inner]
 
@@ -350,6 +354,8 @@ NPC: "当然可以!我很乐意分享。"
         new_level = self.get_affinity_level(new_value)
         if old_level != new_level:
             print(f"  💞 {npc_a}↔{npc_b} 好感度等级变化: {old_level}({current:.0f}) → {new_level}({new_value:.0f}) [Δ{delta:+.1f}]")
+
+        self._save_to_disk()
 
     def apply_event_affinity(self, event_text: str, npc_names: List[str]):
         """根据事件文本自动调整 NPC 间好感度
@@ -425,3 +431,28 @@ NPC: "当然可以!我很乐意分享。"
             }
         return result
 
+    def _save_to_disk(self):
+        """将好感度持久化到 JSON 文件"""
+        try:
+            import os
+            os.makedirs('data', exist_ok=True)
+            with open('data/affinity.json', 'w', encoding='utf-8') as f:
+                json.dump({
+                    "affinity_scores": self.affinity_scores,
+                    "npc_npc_affinity": self.npc_npc_affinity,
+                }, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"⚠️ 好感度持久化失败: {e}")
+
+    def _load_from_disk(self):
+        """从 JSON 文件加载好感度"""
+        try:
+            with open('data/affinity.json', 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                self.affinity_scores = data.get("affinity_scores", {})
+                self.npc_npc_affinity = data.get("npc_npc_affinity", {})
+                print(f"📂 已从磁盘加载好感度数据 ({len(self.affinity_scores)} 个 NPC)")
+        except FileNotFoundError:
+            pass
+        except (json.JSONDecodeError, Exception) as e:
+            print(f"⚠️ 好感度加载失败: {e}")

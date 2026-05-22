@@ -43,25 +43,6 @@ class NPCInfo(BaseModel):
     activity: str = Field(..., description="当前活动")
     available: bool = Field(default=True, description="是否可对话")
 
-class NPCStatusResponse(BaseModel):
-    """NPC状态响应"""
-    dialogues: Dict[str, str] = Field(..., description="NPC当前对话内容")
-    last_update: Optional[datetime] = Field(None, description="上次更新时间")
-    next_update_in: int = Field(..., description="下次更新倒计时(秒)")
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "dialogues": {
-                    "张三": "终于把这个bug修复了,测试通过!",
-                    "李四": "下周的产品评审会需要准备一下资料。",
-                    "王五": "这个界面的配色方案还需要优化一下。"
-                },
-                "last_update": "2024-01-15T10:30:00",
-                "next_update_in": 25
-            }
-        }
-
 class NPCListResponse(BaseModel):
     """NPC列表响应"""
     npcs: List[NPCInfo] = Field(..., description="NPC列表")

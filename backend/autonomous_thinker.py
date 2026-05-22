@@ -106,7 +106,7 @@ class AutonomousThinker:
         if not content:
             return None
 
-        # 加入 pending 队列
+        # 加入 pending 队列（每个 NPC 最多保留 3 条消息）
         if npc_name not in self.pending_messages:
             self.pending_messages[npc_name] = []
 
@@ -116,6 +116,9 @@ class AutonomousThinker:
             "npc_name": npc_name
         }
         self.pending_messages[npc_name].append(msg)
+        # 限制队列长度，防止内存泄漏
+        if len(self.pending_messages[npc_name]) > 3:
+            self.pending_messages[npc_name] = self.pending_messages[npc_name][-3:]
 
         # 设置冷却
         self.greet_cooldown[npc_name] = datetime.now()
@@ -213,16 +216,21 @@ class AutonomousThinker:
         return random.choice(fallbacks)
 
     def get_pending(self, npc_name: str = None) -> List[dict]:
-        """获取待发送的主动消息"""
+        """获取待发送的主动消息（非破坏性读取，消息保留在队列中）"""
         if npc_name:
-            msgs = self.pending_messages.pop(npc_name, [])
-            return msgs
-
+            return list(self.pending_messages.get(npc_name, []))
         all_msgs = []
-        for name in list(self.pending_messages.keys()):
-            msgs = self.pending_messages.pop(name, [])
-            all_msgs.extend(msgs)
+        for name, msgs in self.pending_messages.items():
+            for msg in msgs:
+                all_msgs.append(msg)
         return all_msgs
+
+    def ack_pending(self, npc_name: str = None):
+        """确认前端已处理，删除待发送消息"""
+        if npc_name:
+            self.pending_messages.pop(npc_name, None)
+        else:
+            self.pending_messages.clear()
 
     async def think_all(self):
         """对所有 IDLE NPC 执行思考"""

@@ -27,6 +27,7 @@ const avgAffinityEl = document.getElementById('avgAffinity');
 let currentConvId = null;
 let currentConv = null;
 let allNpcs = [];
+let npcNpcAffinities = {};  // NPC-NPC affinity matrix
 let pollingTimer = null;
 
 // ==================== Initialization ====================
@@ -95,8 +96,8 @@ async function loadNpcsAndInit() {
         });
 
         // Fetch affinities
-        const results = await Promise.all(allNpcs.map(n => fetchNpcAffinity(n.name).catch(() => ({ affinity: 50 }))));
-        results.forEach((r, i) => { allNpcs[i].affinity = r.affinity || 50; allNpcs[i].level = r.level || '友好'; });
+        const results = await Promise.all(allNpcs.map(n => fetchNpcAffinity(n.name).catch(() => null)));
+        results.forEach((r, i) => { if (r) { allNpcs[i].affinity = r.affinity ?? 50; allNpcs[i].level = r.level || '友好'; } });
 
         // Init default conversations
         initDefaultConversations(allNpcs.map(n => n.name));
@@ -192,7 +193,10 @@ async function openConversation(convId) {
     if (currentConv.type === 'group') {
         chatSubtitle.textContent = '群聊 · ' + (currentConv.participants || []).join(', ');
     } else if (currentConv.type === 'npcnpc') {
-        chatSubtitle.textContent = 'NPC 间对话 · ' + (currentConv.participants || []).join(' ↔ ');
+        const [a, b] = (currentConv.participants || []);
+        const affData = (npcNpcAffinities[a] && npcNpcAffinities[a][b]) || (npcNpcAffinities[b] && npcNpcAffinities[b][a]) || {};
+        const affText = affData.affinity != null ? ` · 好感度: ${Math.round(affData.affinity)}` : '';
+        chatSubtitle.textContent = 'NPC 间对话 · ' + (currentConv.participants || []).join(' ↔ ') + affText;
     } else {
         const npc = allNpcs.find(n => n.name === currentConv.name);
         chatSubtitle.textContent = npc ? `${npc.title} · 好感度: ${Math.round(npc.affinity)}` : '';
@@ -461,6 +465,16 @@ function deleteConversation(convId) {
 
 // ==================== NPC-NPC Chat Handling ====================
 
+/** 鲁棒解析 Python datetime 字符串 (ISO 8601 或 str() 格式) → 毫秒时间戳 */
+function parsePythonDate(s) {
+    if (!s) return 0;
+    // ISO 8601: "2026-05-19T12:30:45.123456" — 直接解析
+    const ts = new Date(s).getTime();
+    if (!isNaN(ts)) return ts;
+    // str(datetime): "2026-05-19 12:30:45.123456" — 替换空格为 T
+    return new Date(s.replace(' ', 'T')).getTime();
+}
+
 function handleNpcNpcChat(chat) {
     const convId = makeNpcNpcConvId(chat.npc_a, chat.npc_b);
     let conv = getConversation(convId);
@@ -474,12 +488,26 @@ function handleNpcNpcChat(chat) {
         };
     }
 
+    // 去重：获取已有消息用于比较
+    const existing = loadMessages(convId) || [];
+    const existingKeys = new Set(existing.map(m => `${m.sender}::${m.content}`));
+
+    let newCount = 0;
     for (const msg of chat.messages || []) {
+        const dedupeKey = `${msg.speaker}::${msg.content}`;
+        if (existingKeys.has(dedupeKey)) continue;
+        existingKeys.add(dedupeKey);
+        newCount++;
+
         const storedMsg = { sender: msg.speaker, content: msg.content, time: new Date().toISOString() };
         appendMessage(convId, storedMsg);
         conv.lastMsg = (msg.content || '').substring(0, 40);
         conv.lastTime = new Date().toISOString();
         conv.unread = convId === currentConvId ? 0 : (conv.unread || 0) + 1;
+    }
+
+    if (newCount > 0) {
+        console.log(`💬 NPC间对话 [${chat.npc_a} ↔ ${chat.npc_b}]: +${newCount} 条新消息 (chat_id=${chat.id})`);
     }
 
     upsertConversation(conv);
@@ -498,28 +526,43 @@ async function checkProactiveMessages() {
         const data = await apiRequest('GET', '/npcs/pending-messages', null, { useCache: false });
         if (!data.messages || data.messages.length === 0) return;
 
+        console.log(`📩 收到 ${data.messages.length} 条 NPC 主动消息:`, data.messages.map(m => `${m.npc_name}: ${m.content?.substring(0, 20)}`));
+
         for (const msg of data.messages) {
             const convId = make1v1ConvId(msg.npc_name);
-            const storedMsg = { sender: msg.npc_name, content: msg.content, time: msg.timestamp || new Date().toISOString() };
-            appendMessage(convId, storedMsg);
-            updateConversationPreview(convId, storedMsg);
 
-            // If this conv doesn't exist, create it
+            // 去重：检查是否已有相同时间戳和内容的消息
+            const existing = loadMessages(convId) || [];
+            if (existing.some(m => m.content === msg.content && m.time === msg.timestamp)) continue;
+
+            // 先确保 conversation 存在（appendMessage 内部依赖 conv 已存在才能更新 preview）
             if (!getConversation(convId)) {
                 upsertConversation({
                     id: convId, type: '1v1', name: msg.npc_name,
                     participants: [msg.npc_name],
-                    lastMsg: msg.content.substring(0, 40),
-                    lastTime: msg.timestamp || new Date().toISOString(), unread: 1
+                    lastMsg: '', lastTime: new Date().toISOString(), unread: 0
                 });
             }
+
+            const storedMsg = { sender: msg.npc_name, content: msg.content, time: msg.timestamp || new Date().toISOString() };
+            appendMessage(convId, storedMsg);
+
+            // 当前正在查看的对话不计入未读
+            if (convId === currentConvId) markRead(convId);
+        }
+
+        // 确认已处理，清空服务端队列
+        try {
+            await apiRequest('POST', '/npcs/pending-messages/ack', null, { useCache: false });
+        } catch (e) {
+            console.warn('ACK 失败，消息将在下次轮询重试:', e);
         }
 
         renderConvList();
-        if (currentConvId && currentConv) {
+        if (currentConvId && getConversation(currentConvId)) {
             renderMessages(loadMessages(currentConvId));
         }
-    } catch (e) { /* silent */ }
+    } catch (e) { console.error('checkProactiveMessages failed:', e); }
 }
 
 // ==================== Polling ====================
@@ -540,8 +583,9 @@ async function updateNpcStates() {
 let lastAffinityRefresh = 0;
 
 function startPolling() {
-    if (pollingTimer) clearInterval(pollingTimer);
-    pollingTimer = setInterval(async () => {
+    if (pollingTimer) clearTimeout(pollingTimer);
+
+    async function tick() {
         await updateNpcStates();
         await checkProactiveMessages();
 
@@ -549,9 +593,25 @@ function startPolling() {
         if (Date.now() - lastAffinityRefresh > 30000) {
             lastAffinityRefresh = Date.now();
             try {
-                const results = await Promise.all(allNpcs.map(n => fetchNpcAffinity(n.name).catch(() => ({ affinity: 50 }))));
-                results.forEach((r, i) => { allNpcs[i].affinity = r.affinity || 50; allNpcs[i].level = r.level || '友好'; });
+                const results = await Promise.all(allNpcs.map(n => fetchNpcAffinity(n.name).catch(() => null)));
+                results.forEach((r, i) => { if (r) { allNpcs[i].affinity = r.affinity ?? 50; allNpcs[i].level = r.level || '友好'; } });
                 updateStatusSummary();
+            } catch (e) { /* silent */ }
+
+            // 刷新 NPC 间好感度
+            try {
+                const data = await fetchNpcNpcAffinities();
+                if (data.matrix) npcNpcAffinities = data.matrix;
+                // 如果当前正在查看 NPC 间对话，刷新副标题
+                if (currentConvId && currentConvId.startsWith('npcnpc_')) {
+                    const conv = getConversation(currentConvId);
+                    if (conv) {
+                        const [a, b] = (conv.participants || []);
+                        const affData = (npcNpcAffinities[a] && npcNpcAffinities[a][b]) || (npcNpcAffinities[b] && npcNpcAffinities[b][a]) || {};
+                        const affText = affData.affinity != null ? ` · 好感度: ${Math.round(affData.affinity)}` : '';
+                        chatSubtitle.textContent = 'NPC 间对话 · ' + (conv.participants || []).join(' ↔ ') + affText;
+                    }
+                }
             } catch (e) { /* silent */ }
         }
 
@@ -563,20 +623,24 @@ function startPolling() {
                     handleNpcNpcChat(chat);
                 }
             }
-            // Also process recently completed chats from history (within 10s)
+            // Also process recently completed chats from history (within 15s)
             if (npcChatStatus.history) {
                 const now = Date.now();
                 for (const chat of npcChatStatus.history) {
-                    const endedAt = chat.ended_at ? new Date(chat.ended_at).getTime() : 0;
-                    if (now - endedAt < 10000) {
+                    const endedAt = parsePythonDate(chat.ended_at);
+                    if (endedAt && (now - endedAt) < 15000) {
                         handleNpcNpcChat(chat);
                     }
                 }
             }
-        } catch (e) { /* silent */ }
+        } catch (e) { console.error('NPC chat check failed:', e); }
 
         renderConvList();
-    }, 5000);
+
+        if (pollingTimer) pollingTimer = setTimeout(tick, 5000);
+    }
+
+    tick();
 }
 
 function updateStatusSummary() {
