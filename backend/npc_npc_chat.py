@@ -75,13 +75,13 @@ class NPCNPCChatEngine:
 
     MAX_ROUNDS = 3
     MAX_DURATION = settings.NPC_STATE_TIMEOUT_BUSY  # 60s
-    COOLDOWN = 300         # 同一对冷却 5 分钟
-    GLOBAL_COOLDOWN = 60   # 全局冷却：任意对话结束后 60s 才允许下一场
+    COOLDOWN = 300000         # 同一对冷却 5 分钟
+    GLOBAL_COOLDOWN = 60000   # 全局冷却：任意对话结束后 60s 才允许下一场
     TRIGGER_PROBABILITY = 0.15  # 每次检查 15% 概率
     AFFINITY_THRESHOLD = 50
     MAX_DAILY_CALLS = settings.NPC_NPC_CHAT_MAX_DAILY
-    DEDUP_LOOKBACK = 5     # 去重时回溯最近 5 场对话
-    DEDUP_SIMILARITY_THRESHOLD = 0.55  # Jaccard 相似度阈值
+    DEDUP_LOOKBACK = 8     # 去重时回溯最近 5 场对话
+    DEDUP_SIMILARITY_THRESHOLD = 0.65  # Jaccard 相似度阈值
 
     def __init__(self, npc_manager, timeline_manager, llm=None):
         self.npc_manager = npc_manager
@@ -160,7 +160,7 @@ class NPCNPCChatEngine:
                     # 移除 "我说: " 或 "XXX说: " 前綴
                     if ": " in old_content:
                         old_content = old_content.split(": ", 1)[1]
-                    if self._jaccard_similarity(old_content, new_content) > self.DEDUP_SIMILARITY_THRESHOLD:
+                    if self.npc_manager._jaccard_similarity(old_content, new_content) > self.DEDUP_SIMILARITY_THRESHOLD:
                         return True
             except Exception:
                 pass
@@ -543,7 +543,7 @@ class NPCNPCChatEngine:
                 )
                 is_dup = False
                 for old in recent_contents[-3:]:
-                    if self._jaccard_similarity(old, template_content) > 0.4:
+                    if self.npc_manager._jaccard_similarity(old, template_content) > 0.4:
                         is_dup = True
                         break
                 if not is_dup:
@@ -565,20 +565,7 @@ class NPCNPCChatEngine:
         # ✅ 記憶寫入由 scene_generator._save_scene_to_memory 統一處理
         return messages
 
-    def _jaccard_similarity(self, text_a: str, text_b: str) -> float:
-        """Jaccard 相似度（基于字符 2-gram）"""
-        def get_2grams(s):
-            return set(s[i:i+2] for i in range(len(s)-1))
-
-        grams_a = get_2grams(text_a)
-        grams_b = get_2grams(text_b)
-
-        if not grams_a or not grams_b:
-            return 0.0
-
-        intersection = grams_a & grams_b
-        union = grams_a | grams_b
-        return len(intersection) / len(union) if union else 0.0
+    # _jaccard_similarity 已移至 NPCAgentManager（agents.py），此處改用 self.npc_manager._jaccard_similarity()
 
     def _update_affinity_from_chat(self, npc_a: str, npc_b: str, messages: List[dict]):
         """根据对话内容更新 NPC 间好感度"""

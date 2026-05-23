@@ -15,7 +15,9 @@
       "PowerShell(node -e \"require\\('fs'\\).readFileSync\\('frontend/js/app.js','utf8'\\); console.log\\('JS file readable, no syntax check available but edits applied cleanly'\\)\")",
       "PowerShell(python -c \"import hello_agents; print\\(hello_agents.__file__\\)\" 2>$null)",
       "PowerShell(Get-ChildItem -Path \"E:\\\\agent_test\\\\AI-Town\\\\hello-agents\\\\code\\\\chapter15\\\\Helloagents-AI-Town\" -Recurse -Filter \"hello_agents\" -Directory -ErrorAction SilentlyContinue | Select-Object -First 10 | ForEach-Object { $_.FullName })",
-      "PowerShell(python -c \"import sys; sys.path.insert\\(0, 'HelloAgents'\\); import hello_agents; print\\(hello_agents.__file__\\)\" 2>$null)"
+      "PowerShell(python -c \"import sys; sys.path.insert\\(0, 'HelloAgents'\\); import hello_agents; print\\(hello_agents.__file__\\)\" 2>$null)",
+      "PowerShell(python -c \"import hello_agents; print\\(hello_agents.__file__\\)\")",
+      "PowerShell(Start-Sleep 8; try { $r = Invoke-WebRequest -Uri \"http://localhost:8000/health\" -TimeoutSec 5 -UseBasicParsing; Write-Output \"Backend: $\\($r.Content\\)\" } catch { Write-Output \"Not started yet: $_\" })"
     ]
   }
 }

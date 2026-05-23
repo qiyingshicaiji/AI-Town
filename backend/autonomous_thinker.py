@@ -12,9 +12,9 @@ class AutonomousThinker:
     定时检查条件，决定是否主动向玩家发起对话。
     """
 
-    THINK_INTERVAL = 15       # 思考间隔（秒）
+    THINK_INTERVAL = 15000       # 思考间隔（秒）
     BASE_PROBABILITY = 0.30   # 基础主动发起概率
-    LAST_INTERACT_THRESHOLD = 120  # 2分钟内未互动 → 增加概率
+    LAST_INTERACT_THRESHOLD = 120000  # 2分钟内未互动 → 增加概率
 
     def __init__(self, npc_manager, timeline_manager, llm=None):
         self.npc_manager = npc_manager
@@ -31,12 +31,20 @@ class AutonomousThinker:
         # 防止重复打招呼的冷却
         self.greet_cooldown: Dict[str, datetime] = {}
 
+        # 話題枯竭沉默：連續被去重攔截 2 次後暫停主動發言
+        self._silence_counters: Dict[str, int] = {}
+        # 玩家互動標記（有互動則重置沉默）
+        self._had_player_interaction: Dict[str, bool] = {}
+
         print("🧠 NPC 自主思考引擎已初始化")
         print(f"   思考间隔: {self.THINK_INTERVAL}s, 基础概率: {self.BASE_PROBABILITY}, 冷却: 90s")
+        print(f"   沉默机制: 连续2次去重拦截后暂停，等待玩家互动或新事件")
 
     def record_interaction(self, npc_name: str):
-        """记录 NPC 与玩家的互动时间"""
+        """记录 NPC 与玩家的互动时间，重置沉默计数器"""
         self.last_interactions[npc_name] = datetime.now()
+        self._silence_counters[npc_name] = 0
+        self._had_player_interaction[npc_name] = True
 
     async def think(self, npc_name: str) -> Optional[str]:
         """单个 NPC 思考：是否主动发起对话
@@ -97,14 +105,39 @@ class AutonomousThinker:
             if last is None or last.date() < datetime.now().date():
                 probability = 0.7  # 每天第一次高概率打招呼
 
-        # 随机判断
+        # 随机判断（事件可触发强制唤醒）
         if random.random() >= probability:
+            # 有事件时重置所有沉默计数器
+            if event:
+                for name in list(self._silence_counters.keys()):
+                    self._silence_counters[name] = 0
             return None
+
+        # 話題枯竭檢查：連續 2 次去重攔截 → 沉默，直到玩家互動
+        silence_count = self._silence_counters.get(npc_name, 0)
+        if silence_count >= 2:
+            # 檢查是否有復活條件
+            has_event = bool(self.timeline_manager.get_event_context())
+            has_interaction = self._had_player_interaction.get(npc_name, False)
+            if not has_event and not has_interaction:
+                return None  # 仍沉默
+            # 復活：重置計數器
+            self._silence_counters[npc_name] = 0
+            if has_interaction:
+                self._had_player_interaction[npc_name] = False
 
         # 生成主动消息
         content = await self._generate_initiation(npc_name)
         if not content:
+            # generate_npc_speech 返回 None 表示被去重攔截且 retry 失敗
+            self._silence_counters[npc_name] = silence_count + 1
+            if self._silence_counters[npc_name] >= 2:
+                print(f"  🔇 {npc_name} 连续{self._silence_counters[npc_name]}次被拦截，进入沉默（等待玩家互动或新事件）")
             return None
+
+        # 成功生成，重置沉默计数器
+        if silence_count > 0:
+            self._silence_counters[npc_name] = 0
 
         # 加入 pending 队列（每个 NPC 最多保留 3 条消息）
         if npc_name not in self.pending_messages:
@@ -128,92 +161,39 @@ class AutonomousThinker:
         return content
 
     async def _generate_initiation(self, npc_name: str) -> Optional[str]:
-        """生成主动发起的对话内容"""
+        """生成主动发起的对话内容 — 使用统一的 generate_npc_speech"""
         info = self.npc_manager.get_npc_info(npc_name)
         if not info:
             return None
 
-        # 获取事件和好感度上下文
-        event = self.timeline_manager.get_event_context()
+        # 構建場景上下文
         affinity = 50
         if self.npc_manager.relationship_manager:
             affinity = self.npc_manager.relationship_manager.get_affinity(npc_name)
 
-        # 获取近期记忆
-        memories = []
-        mem_mgr = self.npc_manager.memories.get(npc_name)
-        if mem_mgr:
-            try:
-                memories = mem_mgr.retrieve_memories("", memory_types=["working"], limit=3)
-            except Exception:
-                pass
-
-        # 获取近期感知观察
-        perception_text = ""
-        if mem_mgr:
-            try:
-                perceptions = mem_mgr.retrieve_memories(
-                    query="看到 注意到", memory_types=["perceptual"], limit=2, min_importance=0.3
-                )
-                if perceptions:
-                    perception_text = "【你最近观察到的】\n" + "\n".join(
-                        f"- {p.content[:80]}" for p in perceptions
-                    ) + "\n\n"
-            except Exception:
-                pass
-
-        # 构建 prompt
         affinity_desc = "老朋友" if affinity >= 80 else "比较熟悉" if affinity >= 60 else "普通同事" if affinity >= 40 else "不太熟"
-        memory_text = ""
-        if memories:
-            memory_text = "【近期对话】\n" + "\n".join(
-                f"- {m.content[:80]}" for m in memories[:3]
-            ) + "\n"
+        context = f"你和玩家的关系: {affinity_desc}（好感度: {affinity:.0f}）"
 
-        event_text = f"【今日事件】{event}\n" if event else ""
-
-        prompt = f"""你是{info['title']}{npc_name}。你决定主动和办公室里的同事（玩家）打个招呼或聊点什么。
-
-{event_text}{perception_text}{memory_text}
-【当前关系】{affinity_desc}（好感度: {affinity:.0f}）
-【你的性格】{info.get('personality', '')}
-
-请用一个简短的主动发言开头（20-40字），像微信消息一样自然随意。
-可以提及今日事件、最近对话、或者日常问候。
-只说一句话即可，不要加引号。
-
-你的主动发言："""
-
-        if self.scene_generator and self.llm:
-            try:
-                scene = await self.scene_generator.generate_scene(
-                    npc_names=[npc_name],
-                    trigger_message="主动发起",
-                    max_messages=1,
-                    is_group=False,
-                )
-                if scene and len(scene) > 0:
-                    return scene[0].get("content", "")[:100]
-            except Exception as e:
-                print(f"  ⚠️  场景生成主动消息失败: {e}")
-
-        if self.llm:
-            try:
-                from hello_agents import SimpleAgent
-                agent = SimpleAgent(name=f"Thinker_{npc_name}", llm=self.llm, system_prompt="你是一个主动发起对话的角色。只说一句话。")
-                response = agent.run(prompt)
-                return response.strip()[:100]
-            except Exception as e:
-                print(f"  ⚠️  LLM生成主动消息失败: {e}")
-
-        # Fallback
-        fallbacks = [
-            "嗨，今天怎么样？",
-            "在忙什么呢？",
-        ]
+        event = self.timeline_manager.get_event_context()
         if event:
-            fallbacks.insert(0, f"你听说了吗？{event[:30]}...")
-        return random.choice(fallbacks)
+            context = f"今日事件: {event}\n{context}"
+
+        # ✅ 使用統一發言生成器（自動處理記憶檢索、防重複、記憶寫入）
+        return await self.npc_manager.generate_npc_speech(
+            npc_name=npc_name,
+            context=context,
+            context_type="主动发起",
+            listeners=[],       # 只對玩家，不寫入其他 NPC 記憶
+            temperature=1.0,
+            importance=0.6,
+            instruction_override=(
+                "你決定主動和辦公室的同事（玩家）打個招呼或聊點什麼。"
+                "請用簡短的主動發言開頭（20-40字），像微信消息一樣自然隨意。"
+                "可以提及今日事件、最近對話、或者日常問候。"
+                "只說一句話即可，不要加引號。"
+                "你的主動發言："
+            ),
+        )
 
     def get_pending(self, npc_name: str = None) -> List[dict]:
         """获取待发送的主动消息（非破坏性读取，消息保留在队列中）"""
