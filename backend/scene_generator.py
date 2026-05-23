@@ -95,7 +95,7 @@ class SceneGenerator:
                 llm=self.llm,
                 system_prompt="你是对话编剧。只输出JSON数组，每元素有speaker和content字段。"
             )
-            response = agent.run(prompt)
+            response = agent.run(prompt, temperature=0.9)
             scene = self._parse_json_response(response, npc_names)
 
             # 保存到记忆
@@ -221,11 +221,11 @@ class SceneGenerator:
                 pass  # 记忆查询失败不影响对话生成
 
         if memory_lines:
-            parts.append("【跨场景记忆 — 基于以下记忆自然延续对话，像真人一样提及过去的事】\n" + "\n".join(memory_lines))
-
-        # 3. ✅ 额外上下文（如最近对话历史、去重提示等）
-        if extra_context:
-            parts.append(extra_context)
+            label = (
+                "【跨场景记忆 — 以下是 NPC 最近聊过的话题和互动，"
+                "可以自然延续旧话题，但⚠️注意不要重复讨论已经充分聊过的内容】"
+            )
+            parts.append(label + "\n" + "\n".join(memory_lines))
 
         return "\n\n".join(parts)
 
@@ -251,6 +251,11 @@ class SceneGenerator:
 
         continuity_section = f"\n11. {continuity_rule}" if continuity_rule else ""
 
+        topic_avoid = (
+            "\n12. ⚠️ 避開最近已討論的話題。如果「跨场景记忆」中顯示之前聊過某個話題，"
+            "請主動發展新話題，不要重複討論相同內容。像真人一樣——聊過的事不會反覆提起。"
+        ) if is_npc_npc else ""
+
         return f"""【规则】
 1. {char_rule}
 2. 性格是最核心的驱动力——工作只是背景，不是谈话目的
@@ -261,7 +266,7 @@ class SceneGenerator:
 7. 过往记忆会被不经意提起——像真人的回忆那样自然
 8. 每句话15-40字，微信聊天风格，口语化
 9. {trigger_rule}
-10. 总共约{max_messages}条消息{continuity_section}"""
+10. 总共约{max_messages}条消息{continuity_section}{topic_avoid}"""
 
     def _get_evolution_text(self, npc_name):
         if not self.evolution:

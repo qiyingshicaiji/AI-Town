@@ -1,0 +1,26 @@
+Traceback (most recent call last):
+  File "E:\agent_test\AI-Town\hello-agents\code\chapter15\Helloagents-AI-Town\backend\main.py", line 31, in <module>
+    from agents import get_npc_manager
+  File "E:\agent_test\AI-Town\hello-agents\code\chapter15\Helloagents-AI-Town\backend\agents.py", line 14, in <module>
+    from hello_agents import SimpleAgent, HelloAgentsLLM
+  File "C:\Users\colorful\AppData\Local\Programs\Python\Python314\Lib\site-packages\hello_agents\__init__.py", line 24, in <module>
+    from .agents.simple_agent import SimpleAgent
+  File "C:\Users\colorful\AppData\Local\Programs\Python\Python314\Lib\site-packages\hello_agents\agents\__init__.py", line 5, in <module>
+    from .react_agent import ReActAgent
+  File "C:\Users\colorful\AppData\Local\Programs\Python\Python314\Lib\site-packages\hello_agents\agents\react_agent.py", line 9, in <module>
+    from ..tools.registry import ToolRegistry
+  File "C:\Users\colorful\AppData\Local\Programs\Python\Python314\Lib\site-packages\hello_agents\tools\__init__.py", line 7, in <module>
+    from .builtin.search_tool import SearchTool
+  File "C:\Users\colorful\AppData\Local\Programs\Python\Python314\Lib\site-packages\hello_agents\tools\builtin\__init__.py", line 27, in <module>
+    from .gaia_evaluation_tool import GAIAEvaluationTool
+  File "C:\Users\colorful\AppData\Local\Programs\Python\Python314\Lib\site-packages\hello_agents\tools\builtin\gaia_evaluation_tool.py", line 12, in <module>
+    from hello_agents.evaluation.benchmarks.gaia.dataset import GAIADataset
+  File "C:\Users\colorful\AppData\Local\Programs\Python\Python314\Lib\site-packages\hello_agents\evaluation\__init__.py", line 27, in <module>
+    from hello_agents.evaluation.benchmarks.bfcl.dataset import BFCLDataset
+  File "C:\Users\colorful\AppData\Local\Programs\Python\Python314\Lib\site-packages\hello_agents\evaluation\benchmarks\__init__.py", line 12, in <module>
+    from hello_agents.evaluation.benchmarks.data_generation.llm_judge import LLMJudgeEvaluator
+  File "C:\Users\colorful\AppData\Local\Programs\Python\Python314\Lib\site-packages\hello_agents\evaluation\benchmarks\data_generation\__init__.py", line 9, in <module>
+    from hello_agents.evaluation.benchmarks.data_generation.dataset import AIDataset
+  File "C:\Users\colorful\AppData\Local\Programs\Python\Python314\Lib\site-packages\hello_agents\evaluation\benchmarks\data_generation\dataset.py", line 14, in <module>
+    from huggingface_hub import snapshot_download
+ModuleNotFoundError: No module named 'huggingface_hub'

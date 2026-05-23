@@ -1,25 +1,44 @@
-# Task Plan: NPC 对话连续性与记忆演化
+# Task Plan: NPC 发言防重复增强 (v3)
 
-## Phase 1-3: NPC-NPC 对话修复 ✅
-(详见之前记录)
+**目标**: 修复同一运行内 NPC 发言重复问题（主动消息循环 / 群聊抢话循环 / NPC-NPC 跨批次重复）
 
-## Phase 4: 群聊抢话连续性修复 ✅
+## Phase 1: L1 + L4 + L5 — agents.py 核心增强
 
-### 问题
-群聊抢话中 NPC 同样重复发言、无法自然延续对话。
+### L1: 强化 _is_speech_duplicate()
+- 加语义向量余弦相似度检测（通过 episodic memory 的 embedder）
+- 加关键词指纹检测（实词集合重叠率）
+- 三取一命中即拦截（Jaccard / 语义 / 关键词）
 
-### 根因
-`_generate_speech_fast` 的 prompt 过于简单：
-- 只有事件文本 + 最近发言 + 一句话指令
-- 没有记忆检索
-- 没有 NPC 人格上下文
-- 没有跨场次连续性
-- 没有去重机制
+### L4: 修复记忆检索 query
+- context_type 驱动检索模板（"主动发起"→话题词，"群聊抢话"→最近上下文）
+- 替换无意义的 `context[:60]`
 
-### 修复 (group_chat_engine.py v3)
-1. **记忆检索**：每次生成发言前，用当前对话上下文查询 NPC 记忆
-2. **人格注入**：prompt 包含 NPC 的 core_personality、speaking_style、quirks
-3. **跨场次连续性**：`_last_contention` 记录上轮抢话，下次抢话时注入 prompt
-4. **发言去重**：`_speech_history` 跟踪每个 NPC 的历史发言，prompt 中展示"你之前说过的话"
-5. **后生成去重**：Jaccard 相似度检查，高度重复时使用备选发言
-6. **注入 scene_generator**：state_manager 将 scene_generator 注入 group_chat_engine
+### L5: retry 话题种子
+- 从事件/性格/话题池随机抽取种子词注入 retry prompt
+- retry 仍重复则返回 None
+
+Status: pending
+
+## Phase 2: L2 — autonomous_thinker.py 沉默机制
+
+- `__init__` 加 `_silence_counters` 和 `_had_player_interaction`
+- `think()` 沉默检查：连续 2 次被拦截 → 跳过
+- `record_interaction()` 重置计数器
+
+Status: pending
+
+## Phase 3: L3 — scene_generator.py 话题避开
+
+- `_build_rules()` 加话题避开规则
+- `_build_history_text()` 记忆标签提示
+
+Status: pending
+
+## Phase 4: 验证
+
+- 启动后端观察主动消息日志
+- 触发群聊抢话 3 轮
+- 等待 NPC-NPC 对话 2 场
+- 确认去重拦截日志中出现新维度标记
+
+Status: pending

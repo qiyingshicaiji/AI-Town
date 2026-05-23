@@ -1,13 +1,12 @@
 # Progress Log
 
-## Session 2026-05-22
+## Session 2026-05-23
 
-### Round 1: 降低刷屏频率 ✅
-- 修改 npc_npc_chat.py: COOLDOWN 120→300s, GLOBAL_COOLDOWN 60s, TRIGGER_PROBABILITY 0.50→0.15
-- 添加 _pair_content_history 去重机制
-- 添加 _build_recent_chat_context 注入 prompt
+### Brainstorming (done)
+- 诊断出三类重复问题：主动消息循环 / 群聊抢话循环 / NPC-NPC 跨批次重复
+- 确定根因：Jaccard 2-gram 对短消息无效 + 记忆检索 query 无用 + retry 只生成问候变体
+- 确定不改 scene_generator 批量生成模式
 
-### Round 2: 增强记忆检索 (当前)
-- 分析根因：记忆保存了但 NPC-NPC 场景检索不到
-- 修复 scene_generator 的 _build_history_text
-- 修复 npc_npc_chat 传递上次对话上下文
+### Plan written (done)
+- 五层修复方案：L1 去重增强 / L2 主动消息沉默 / L3 话题避开 / L4 检索修复 / L5 retry 种子
+- 计划文件：C:\Users\colorful\.claude\plans\npc-npc-llm-cuddly-pixel.md
