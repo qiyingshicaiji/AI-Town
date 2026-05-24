@@ -12,9 +12,9 @@ class AutonomousThinker:
     定时检查条件，决定是否主动向玩家发起对话。
     """
 
-    THINK_INTERVAL = 15000       # 思考间隔（秒）
+    THINK_INTERVAL = 150       # 思考间隔（秒）
     BASE_PROBABILITY = 0.30   # 基础主动发起概率
-    LAST_INTERACT_THRESHOLD = 120000  # 2分钟内未互动 → 增加概率
+    LAST_INTERACT_THRESHOLD = 120  # 2分钟内未互动 → 增加概率
 
     def __init__(self, npc_manager, timeline_manager, llm=None):
         self.npc_manager = npc_manager
@@ -60,7 +60,7 @@ class AutonomousThinker:
         # 冷却检查（同一 NPC 两次主动消息间隔 >= 90s）
         if npc_name in self.greet_cooldown:
             elapsed = (datetime.now() - self.greet_cooldown[npc_name]).total_seconds()
-            if elapsed < 90:
+            if elapsed < 9000:
                 return None
 
         # 计算主动发起概率
@@ -190,7 +190,7 @@ class AutonomousThinker:
                 "你決定主動和辦公室的同事（玩家）打個招呼或聊點什麼。"
                 "請用簡短的主動發言開頭（20-40字），像微信消息一樣自然隨意。"
                 "可以提及今日事件、最近對話、或者日常問候。"
-                "只說一句話即可，不要加引號。"
+                "可以说一句话或者几句话来完整表达你的意思，不要加引號。"
                 "你的主動發言："
             ),
         )
