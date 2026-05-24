@@ -136,7 +136,7 @@ def create_system_prompt(name: str, role: Dict[str, str]) -> str:
 【重要准则】
 1. 性格是你的核心驱动力。工作只是背景，不是谈话的目的
 2. 用第一人称"我"说话，像真人一样自然
-3. 允许跑题、闲聊、吐槽、开玩笑——这是正常人的对话方式
+3. 允许跑题、闲聊、吐槽、开玩笑——这是正常人的对话方式,但是不要重复已经充分讨论过的话题和说过的话
 4. 开心的事会让你话变多，不舒服的事会让你沉默或冷淡
 5. 好感度会影响你对玩家的态度（亲切/客气/疏离）
 6. 过往的记忆会不经意被你提起——像真人的回忆那样自然
@@ -226,11 +226,11 @@ class NPCAgentManager:
         # 配置记忆系统
         memory_config = MemoryConfig(
             storage_path=memory_dir,
-            working_memory_capacity=10,  # 最近10条对话
-            working_memory_tokens=2000,  # 最多2000个token
+            working_memory_capacity=50,  # 最近20条对话
+            working_memory_tokens=4000,  # 最多4000个token
             episodic_memory_capacity=150,  # 最多150条长期记忆
             enable_forgetting=True,  # 启用遗忘机制
-            forgetting_threshold=0.3  # 重要性低于0.3的记忆会被遗忘
+            forgetting_threshold=0.4  # 重要性低于0.4的记忆会被遗忘
         )
 
         # 创建记忆管理器
@@ -367,9 +367,9 @@ class NPCAgentManager:
             if memory_manager:
                 relevant_memories = memory_manager.retrieve_memories(
                     query=message,
-                    memory_types=["working", "episodic"],
-                    limit=5,
-                    min_importance=0.3
+                    memory_types=["working", "episodic","perceptual"],
+                    limit=10,
+                    min_importance=0.4
                 )
                 log_memory_retrieval(npc_name, len(relevant_memories), relevant_memories)
 
@@ -515,7 +515,7 @@ class NPCAgentManager:
         memory_manager.add_memory(
             content=f"玩家说: {player_message}",
             memory_type="working",  # 先存入工作记忆
-            importance=0.5,  # 中等重要性
+            importance=0.6,  # 中等重要性
             metadata={
                 "speaker": "player",
                 "player_id": player_id,
@@ -536,7 +536,7 @@ class NPCAgentManager:
         memory_manager.add_memory(
             content=f"我说: {npc_response}",
             memory_type="working",  # 先存入工作记忆
-            importance=0.6,  # 稍高重要性
+            importance=0.5,  # 稍高重要性
             metadata={
                 "speaker": npc_name,
                 "player_id": player_id,
@@ -576,7 +576,7 @@ class NPCAgentManager:
                     # 低重要性記憶遺忘
                     forgotten = memory_manager.forget_low_importance(
                         memory_type="working",
-                        importance_threshold=0.3
+                        importance_threshold=0.4
                     )
                     if forgotten > 0:
                         print(f"  🧹 {npc_name}: 遗忘了 {forgotten} 条低重要性工作记忆")
@@ -710,7 +710,7 @@ class NPCAgentManager:
             return 0.0
         return len(kw_a & kw_b) / len(kw_a | kw_b)
 
-    def _is_speech_duplicate(self, npc_name: str, new_content: str, threshold: float = 0.55) -> bool:
+    def _is_speech_duplicate(self, npc_name: str, new_content: str, threshold: float = 0.75) -> bool:
         """檢查新發言是否與記憶中最近的發言高度重複
 
         三維度檢測（任一命中即攔截）：
@@ -802,10 +802,10 @@ class NPCAgentManager:
         context_type: str = "对话",
         listeners: Optional[List[str]] = None,
         temperature: float = 1.0,
-        max_tokens: int = 100,
+        max_tokens: int = 128,
         instruction_override: Optional[str] = None,
         extra_context: str = "",
-        dedup_threshold: float = 0.55,
+        dedup_threshold: float = 0.75,
         importance: float = 0.5,
     ) -> Optional[str]:
         """統一的 NPC 發言生成入口
@@ -868,16 +868,16 @@ class NPCAgentManager:
                 # context_type 驅動的查詢模板，替換無意義的 context[:60]
                 query_templates = {
                     "主动发起": "聊天 问候 话题 日常 工作 天气 最近",
-                    "群聊抢话": context[-100:] if context else "",
-                    "NPC间对话": context[-100:] if context else "",
-                    "对话": context[-100:] if context else "",
+                    "群聊抢话": context[-125:] if context else "",
+                    "NPC间对话": context[-125:] if context else "",
+                    "对话": context[-125:] if context else "",
                 }
-                query = query_templates.get(context_type, context[-100:] if context else "")
+                query = query_templates.get(context_type, context[-125:] if context else "")
                 memories = mem_mgr.retrieve_memories(
                     query=query,
                     memory_types=["working", "episodic"],
-                    limit=4,
-                    min_importance=0.2
+                    limit=10,
+                    min_importance=0.3
                 )
                 if memories:
                     mem_lines = [f"  - {m.content[:100]}" for m in memories]
@@ -893,7 +893,7 @@ class NPCAgentManager:
                 recent_speeches = mem_mgr.retrieve_memories(
                     query="我说",
                     memory_types=["working"],
-                    limit=5,
+                    limit=10,
                     min_importance=0.1
                 )
                 if recent_speeches:

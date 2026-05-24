@@ -75,8 +75,8 @@ class NPCNPCChatEngine:
 
     MAX_ROUNDS = 3
     MAX_DURATION = settings.NPC_STATE_TIMEOUT_BUSY  # 60s
-    COOLDOWN = 300000         # 同一对冷却 5 分钟
-    GLOBAL_COOLDOWN = 60000   # 全局冷却：任意对话结束后 60s 才允许下一场
+    COOLDOWN = 300         # 同一对冷却 5 分钟
+    GLOBAL_COOLDOWN = 60   # 全局冷却：任意对话结束后 60s 才允许下一场
     TRIGGER_PROBABILITY = 0.15  # 每次检查 15% 概率
     AFFINITY_THRESHOLD = 50
     MAX_DAILY_CALLS = settings.NPC_NPC_CHAT_MAX_DAILY
