@@ -9,11 +9,12 @@ from contextlib import asynccontextmanager
 import uvicorn
 import time
 import json
+from datetime import datetime
 
 from config import settings
 from models import (
     ChatRequest, ChatResponse,
-    NPCStatusResponse, NPCListResponse, NPCInfo,
+    NPCListResponse, NPCInfo,
     # NPC 状态机
     NPCStateInfo, NPCStateListResponse, NPCState,
     # 时间线系统
@@ -23,7 +24,9 @@ from models import (
     # 群聊
     GroupChatRequest, GroupChatResponse,
     # NPC 间聊天
-    NPCNPCChatRecord, NPCNPCChatStatusResponse
+    NPCNPCChatRecord, NPCNPCChatStatusResponse,
+    # 主动消息
+    PendingMessagesResponse, AckPendingRequest
 )
 from agents import get_npc_manager
 from state_manager import get_state_manager
@@ -176,25 +179,6 @@ async def list_npcs():
         total=len(npcs)
     )
 
-@app.get("/npcs/status", response_model=NPCStatusResponse)
-async def get_npcs_status():
-    """获取所有NPC的当前状态"""
-    _, state_mgr, _ = get_managers()
-    state = state_mgr.get_current_state()
-    return NPCStatusResponse(
-        dialogues=state["dialogues"],
-        last_update=state["last_update"],
-        next_update_in=state["next_update_in"]
-    )
-
-@app.post("/npcs/status/refresh")
-async def refresh_npcs_status():
-    """强制刷新NPC状态"""
-    _, state_mgr, _ = get_managers()
-    await state_mgr.force_update()
-    state = state_mgr.get_current_state()
-    return {"message": "NPC状态已刷新", "dialogues": state["dialogues"]}
-
 # ⚠️ 具体路由必须在 /npcs/{npc_name} 通配路由之前
 @app.get("/npcs/states", response_model=NPCStateListResponse)
 async def get_npc_states():
@@ -238,6 +222,52 @@ async def get_npc_npc_affinities():
     return {"matrix": matrix}
 
 # ⚠️ 通配路由 /npcs/{npc_name} 必须在所有具体路由之后
+
+@app.get("/npcs/pending-messages", response_model=PendingMessagesResponse)
+async def get_pending_messages(npc_name: str = None):
+    """获取 NPC 主动发起的待处理消息"""
+    _, state_mgr, _ = get_managers()
+    thinker = getattr(state_mgr, 'autonomous_thinker', None)
+    if not thinker:
+        return PendingMessagesResponse(messages=[])
+    msgs = thinker.get_pending(npc_name)
+    return PendingMessagesResponse(messages=msgs)
+
+@app.post("/npcs/pending-messages/ack")
+async def ack_pending_messages(req: AckPendingRequest = None):
+    """前端确认已处理待发送消息（支持指定消息 key 避免误删新消息）
+
+    Body:
+        npc_name: 如果指定，仅确认该 NPC 的消息
+        message_keys: 要确认的具体消息 key 列表（格式: "npc_name::timestamp"）
+    """
+    _, state_mgr, _ = get_managers()
+    thinker = getattr(state_mgr, 'autonomous_thinker', None)
+    if not thinker:
+        return {"ack": False}
+    npc_name = req.npc_name if req else None
+    message_keys = req.message_keys if req else None
+    thinker.ack_pending(npc_name, message_keys)
+    return {"ack": True}
+
+@app.post("/npc/{npc_name}/initiate")
+async def force_npc_initiate(npc_name: str):
+    """强制指定 NPC 主动向玩家搭话"""
+    npc_mgr, state_mgr, _ = get_managers()
+    if npc_name not in npc_mgr.agents:
+        raise HTTPException(status_code=404, detail=f"NPC '{npc_name}' 不存在")
+
+    thinker = getattr(state_mgr, 'autonomous_thinker', None)
+    if not thinker:
+        raise HTTPException(status_code=503, detail="自主思考引擎未初始化")
+
+    try:
+        msg = await thinker.force_initiate(npc_name)
+        return msg
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/npcs/{npc_name}")
 async def get_npc_info(npc_name: str):
     """获取指定NPC的详细信息"""
@@ -249,10 +279,6 @@ async def get_npc_info(npc_name: str):
             status_code=404,
             detail=f"NPC '{npc_name}' 不存在"
         )
-
-    # 添加当前对话
-    current_dialogue = state_mgr.get_npc_dialogue(npc_name)
-    npc_info["current_dialogue"] = current_dialogue
 
     return npc_info
 
@@ -584,6 +610,40 @@ async def set_active_timeline(timeline_id: str):
     return {"message": f"已切换到时间线 '{timeline_id}'", "active_id": timeline_id}
 
 
+# ==================== 仿真控制路由 ====================
+
+@app.get("/simulation/status")
+async def get_simulation_status():
+    """获取仿真运行状态"""
+    _, state_mgr, _ = get_managers()
+    chat_engine = getattr(state_mgr, 'npc_chat_engine', None)
+    daily_remaining = chat_engine.MAX_DAILY_CALLS - chat_engine.daily_call_count if chat_engine else 0
+    active_count = len([c for c in chat_engine.active_chats.values() if not c.get("ended_at")]) if chat_engine else 0
+    return {
+        "paused": state_mgr.is_paused() if state_mgr else False,
+        "active_npc_chats": active_count,
+        "daily_calls_remaining": max(0, daily_remaining)
+    }
+
+@app.post("/simulation/pause")
+async def pause_simulation():
+    """暂停后台自动循环"""
+    _, state_mgr, _ = get_managers()
+    if not state_mgr:
+        raise HTTPException(status_code=503, detail="状态管理器未初始化")
+    state_mgr.pause()
+    return {"status": "paused", "message": "模拟已暂停"}
+
+@app.post("/simulation/resume")
+async def resume_simulation():
+    """恢复后台自动循环"""
+    _, state_mgr, _ = get_managers()
+    if not state_mgr:
+        raise HTTPException(status_code=503, detail="状态管理器未初始化")
+    state_mgr.resume()
+    return {"status": "running", "message": "模拟已恢复"}
+
+
 # ==================== 群聊路由 ====================
 
 import asyncio as _asyncio, random as _random
@@ -697,16 +757,6 @@ async def group_chat(request: GroupChatRequest):
 
 # ==================== 自主思考路由 ====================
 
-@app.get("/npcs/pending-messages")
-async def get_pending_messages(npc_name: str = None):
-    """获取 NPC 主动发起的待处理消息"""
-    _, state_mgr, _ = get_managers()
-    thinker = getattr(state_mgr, 'autonomous_thinker', None)
-    if not thinker:
-        return {"messages": []}
-    msgs = thinker.get_pending(npc_name)
-    return {"messages": msgs}
-
 
 # ==================== 群聊抢话路由 ====================
 
@@ -772,25 +822,28 @@ async def get_npc_npc_chat_status():
             npc_a=chat.get("npc_a", ""),
             npc_b=chat.get("npc_b", ""),
             messages=chat.get("messages", []),
-            started_at=str(chat.get("started_at", "")),
+            started_at=chat.get("started_at", "").isoformat() if hasattr(chat.get("started_at", ""), 'isoformat') else str(chat.get("started_at", "")),
             trigger_reason=chat.get("trigger_reason", "auto")
         ))
 
     history = []
     for chat in chat_engine.chat_history[-20:]:
+        started = chat.get("started_at", "")
+        ended = chat.get("ended_at", "")
         history.append(NPCNPCChatRecord(
             id=chat.get("id", ""),
             npc_a=chat.get("npc_a", ""),
             npc_b=chat.get("npc_b", ""),
             messages=chat.get("messages", []),
-            started_at=str(chat.get("started_at", "")),
-            ended_at=str(chat.get("ended_at", "")),
+            started_at=started.isoformat() if hasattr(started, 'isoformat') else str(started),
+            ended_at=ended.isoformat() if hasattr(ended, 'isoformat') else (str(ended) if ended else ""),
             trigger_reason=chat.get("trigger_reason", "auto")
         ))
 
     cooldowns = {}
+    now = datetime.now()
     for pair, dt in chat_engine.cooldowns.items():
-        remaining = max(0, int((dt - __import__('datetime').datetime.now()).total_seconds()))
+        remaining = max(0, int(chat_engine.COOLDOWN - (now - dt).total_seconds()))
         cooldowns[f"{pair[0]}-{pair[1]}"] = remaining
 
     return NPCNPCChatStatusResponse(active_chats=active, history=history, cooldowns=cooldowns)
@@ -803,12 +856,28 @@ async def get_npc_npc_chat_history(limit: int = Query(default=50, le=100)):
     chat_engine = getattr(state_mgr, 'npc_chat_engine', None)
     if not chat_engine:
         return {"history": []}
-    return {"history": chat_engine.chat_history[-limit:]}
+
+    # 使用与 /status 相同的序列化方式，确保 datetime 正确转换
+    from datetime import datetime as dt
+    serialized = []
+    for chat in chat_engine.chat_history[-limit:]:
+        started = chat.get("started_at", "")
+        ended = chat.get("ended_at", "")
+        serialized.append({
+            "id": chat.get("id", ""),
+            "npc_a": chat.get("npc_a", ""),
+            "npc_b": chat.get("npc_b", ""),
+            "messages": chat.get("messages", []),
+            "started_at": started.isoformat() if hasattr(started, 'isoformat') else str(started),
+            "ended_at": ended.isoformat() if hasattr(ended, 'isoformat') else (str(ended) if ended else ""),
+            "trigger_reason": chat.get("trigger_reason", "auto"),
+        })
+    return {"history": serialized}
 
 
 @app.post("/npc-npc-chat/trigger")
 async def trigger_npc_npc_chat(npc_a: str = Query(...), npc_b: str = Query(...)):
-    """手动触发 NPC 间对话（测试用）"""
+    """手动触发 NPC 间对话"""
     _, state_mgr, _ = get_managers()
     chat_engine = getattr(state_mgr, 'npc_chat_engine', None)
     if not chat_engine:
@@ -818,11 +887,19 @@ async def trigger_npc_npc_chat(npc_a: str = Query(...), npc_b: str = Query(...))
     if npc_a not in npc_mgr.agents or npc_b not in npc_mgr.agents:
         raise HTTPException(status_code=404, detail="NPC不存在")
 
-    success = await chat_engine.trigger_chat(npc_a, npc_b, reason="manual")
-    if not success:
-        raise HTTPException(status_code=409, detail="无法触发对话（状态/冷却/好感度不满足）")
+    if npc_a == npc_b:
+        raise HTTPException(status_code=400, detail="请选择两个不同的NPC")
 
-    return {"message": f"已触发 {npc_a} 与 {npc_b} 的对话"}
+    # 检查是否有正在进行的对话
+    active_count = sum(1 for c in chat_engine.active_chats.values() if not c.get("ended_at"))
+    if active_count > 0:
+        raise HTTPException(status_code=409, detail="已有对话正在进行，请等待结束后再试")
+
+    chat_id = await chat_engine.trigger_chat(npc_a, npc_b, reason="manual")
+    if not chat_id:
+        raise HTTPException(status_code=500, detail="对话生成失败")
+
+    return {"message": f"已触发 {npc_a} 与 {npc_b} 的对话", "chat_id": chat_id}
 
 
 # ==================== 主程序入口 ====================

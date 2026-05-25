@@ -73,12 +73,15 @@ class NPCNPCChatEngine:
     - 每日最多 50 次 LLM 调用
     """
 
-    MAX_ROUNDS = 3
+    MAX_ROUNDS = 5
     MAX_DURATION = settings.NPC_STATE_TIMEOUT_BUSY  # 60s
-    COOLDOWN = 120
-    TRIGGER_PROBABILITY = 0.30
+    COOLDOWN = 300         # 同一对冷却 5 分钟
+    GLOBAL_COOLDOWN = 60   # 全局冷却：任意对话结束后 60s 才允许下一场
+    TRIGGER_PROBABILITY = 0.4  # 每次检查 15% 概率
     AFFINITY_THRESHOLD = 50
     MAX_DAILY_CALLS = settings.NPC_NPC_CHAT_MAX_DAILY
+    DEDUP_LOOKBACK = 8     # 去重时回溯最近 5 场对话
+    DEDUP_SIMILARITY_THRESHOLD = 0.65  # Jaccard 相似度阈值
 
     def __init__(self, npc_manager, timeline_manager, llm=None):
         self.npc_manager = npc_manager
@@ -88,6 +91,9 @@ class NPCNPCChatEngine:
 
         # 冷却追踪: {(npc_a, npc_b): datetime}
         self.cooldowns: Dict[tuple, datetime] = {}
+
+        # 全局冷却：任何对话结束后才开始计时
+        self._global_cooldown_until: Optional[datetime] = None
 
         # 活跃对话: {chat_id: ActiveChat}
         self.active_chats: Dict[str, dict] = {}
@@ -99,12 +105,10 @@ class NPCNPCChatEngine:
         self.daily_call_count = 0
         self._last_daily_reset = datetime.now().date()
 
-        # 上次对话内容（用于去重）
-        self._last_chat_content: Optional[str] = None
-
         print("💬 NPC聊天引擎已初始化")
         print(f"   触发条件: 好感度≥{self.AFFINITY_THRESHOLD} + 双IDLE + {self.TRIGGER_PROBABILITY*100:.0f}%概率")
-        print(f"   防刷屏: 最多{self.MAX_ROUNDS}轮 + {self.MAX_DURATION}s超时 + {self.COOLDOWN}s冷却")
+        print(f"   防刷屏: 最多{self.MAX_ROUNDS}轮 + {self.MAX_DURATION}s超时 + {self.COOLDOWN}s冷却 + {self.GLOBAL_COOLDOWN}s全局冷却")
+        print(f"   内容去重: 基於記憶系統 + 相似度阈值{self.DEDUP_SIMILARITY_THRESHOLD}")
         print(f"   每日上限: {self.MAX_DAILY_CALLS}次LLM调用")
 
     def _reset_daily_counter(self):
@@ -127,6 +131,40 @@ class NPCNPCChatEngine:
         """设置冷却"""
         key = (npc_a, npc_b) if npc_a < npc_b else (npc_b, npc_a)
         self.cooldowns[key] = datetime.now()
+        # 同时设置全局冷却
+        self._global_cooldown_until = datetime.now() + timedelta(seconds=self.GLOBAL_COOLDOWN)
+
+    def _is_globally_cooling_down(self) -> bool:
+        """全局冷却：任何对话结束后 GLOBAL_COOLDOWN 秒内不允许新对话"""
+        if self._global_cooldown_until is None:
+            return False
+        return datetime.now() < self._global_cooldown_until
+
+    def _would_be_duplicate(self, npc_a: str, npc_b: str, new_content: str) -> bool:
+        """檢查新對話內容是否與記憶中最近的對話高度重複（使用記憶系統）"""
+        # 從 NPC 的記憶中檢索最近的 NPC-NPC 對話內容
+        for npc_name in [npc_a, npc_b]:
+            try:
+                mem_mgr = self.npc_manager.memories.get(npc_name)
+                if not mem_mgr:
+                    continue
+                # 檢索最近的 NPC 間對話記憶
+                recent = mem_mgr.retrieve_memories(
+                    query=f"{npc_a if npc_name == npc_b else npc_b} 对话",
+                    memory_types=["working", "episodic"],
+                    limit=5,
+                    min_importance=0.1
+                )
+                for mem in recent:
+                    old_content = mem.content
+                    # 移除 "我说: " 或 "XXX说: " 前綴
+                    if ": " in old_content:
+                        old_content = old_content.split(": ", 1)[1]
+                    if self.npc_manager._jaccard_similarity(old_content, new_content) > self.DEDUP_SIMILARITY_THRESHOLD:
+                        return True
+            except Exception:
+                pass
+        return False
 
     async def check_and_trigger(self) -> Optional[str]:
         """检查触发条件，如果满足则触发 NPC 间对话
@@ -136,12 +174,26 @@ class NPCNPCChatEngine:
         """
         self._reset_daily_counter()
 
+        # 清理已完成超过 15 秒的活跃对话
+        now = datetime.now()
+        stale_ids = []
+        for cid, chat in self.active_chats.items():
+            if chat.get("ended_at") and (now - chat["ended_at"]).total_seconds() > 15:
+                stale_ids.append(cid)
+        for cid in stale_ids:
+            del self.active_chats[cid]
+
         # 检查每日上限
         if self.daily_call_count >= self.MAX_DAILY_CALLS:
             return None
 
-        # 检查是否有活跃对话（同时最多 1 组）
-        if len(self.active_chats) > 0:
+        # 检查全局冷却
+        if self._is_globally_cooling_down():
+            return None
+
+        # 检查是否还有正在进行（未结束）的活跃对话
+        active_count = sum(1 for c in self.active_chats.values() if not c.get("ended_at"))
+        if active_count > 0:
             return None
 
         # 获取所有 NPC
@@ -201,12 +253,11 @@ class NPCNPCChatEngine:
                 return False
             if self._is_cooling_down(npc_a, npc_b):
                 return False
-        else:
-            # 手动触发可以覆盖一些限制
-            pass
+        # 手动触发跳过 idle/冷却/好感度检查
 
-        # 检查是否有活跃对话
-        if len(self.active_chats) > 0:
+        # 检查是否有活跃（未结束的）对话
+        active_count = sum(1 for c in self.active_chats.values() if not c.get("ended_at"))
+        if active_count > 0:
             return False
 
         chat_id = uuid4().hex[:8]
@@ -246,7 +297,7 @@ class NPCNPCChatEngine:
             }]
 
         finally:
-            # 结束对话
+            # 结束对话 — 保留在 active_chats 15秒供前端轮询捕获
             chat["ended_at"] = datetime.now()
             self.chat_history.append(chat)
             if len(self.chat_history) > 200:
@@ -259,18 +310,21 @@ class NPCNPCChatEngine:
             # 设置冷却
             self._set_cooldown(npc_a, npc_b)
 
-            # 清理活跃对话
-            if chat_id in self.active_chats:
-                del self.active_chats[chat_id]
+            # ⚠️ 不立即删除 active_chats — check_and_trigger() 会清理超过15秒的已完成对话
 
         # 更新好感度
         self._update_affinity_from_chat(npc_a, npc_b, chat["messages"])
 
-        return True
+        return chat_id
 
     async def _generate_conversation(self, npc_a: str, npc_b: str) -> List[dict]:
         """生成 NPC 间对话（优先用场景生成器）"""
         self.daily_call_count += 1
+
+        # 构建「最近已聊过」上下文 — 供 LLM 避开重复话题
+        recent_context = self._build_recent_chat_context(npc_a, npc_b)
+
+        messages = []
 
         # 优先使用场景生成器
         if self.scene_generator:
@@ -280,54 +334,130 @@ class NPCNPCChatEngine:
                     trigger_message="",
                     max_messages=6,
                     is_npc_npc=True,
+                    extra_context=recent_context,
                 )
                 if scene:
                     content_str = "|".join(m.get("content", "") for m in scene)
-                    self._last_chat_content = content_str
-                    return scene
+                    if self._would_be_duplicate(npc_a, npc_b, content_str):
+                        print(f"  🚫 内容去重拦截 [{npc_a}↔{npc_b}]: 与最近对话高度相似")
+                        messages = self._generate_fallback(npc_a, npc_b, "", recent_context)
+                    else:
+                        messages = scene
             except Exception as e:
                 print(f"⚠️ 场景生成器NPC对话失败: {e}")
 
-        # 获取事件背景
-        event_context = ""
-        try:
-            event_text = self.timeline_manager.get_event_context()
-            if event_text:
-                event_context = f"【今日事件】{event_text}\n"
-        except Exception:
-            pass
-
-        # 获取 NPC 信息
-        info_a = self.npc_manager.get_npc_info(npc_a)
-        info_b = self.npc_manager.get_npc_info(npc_b)
-        aff = self.npc_manager.relationship_manager.get_npc_npc_affinity(npc_a, npc_b)
-        aff_level = self.npc_manager.relationship_manager.get_affinity_level(aff)
-
-        # 优先使用 LLM
-        if self.llm:
+        # 回退到独立 LLM
+        if not messages:
+            event_context = ""
             try:
-                return await self._generate_with_llm(npc_a, npc_b, info_a, info_b, aff_level, event_context)
-            except Exception as e:
-                print(f"⚠️  LLM生成NPC对话失败: {e}，使用fallback")
+                event_text = self.timeline_manager.get_event_context()
+                if event_text:
+                    event_context = f"【今日事件】{event_text}\n"
+            except Exception:
+                pass
 
-        # Fallback
-        return self._generate_fallback(npc_a, npc_b, event_context)
+            info_a = self.npc_manager.get_npc_info(npc_a)
+            info_b = self.npc_manager.get_npc_info(npc_b)
+            aff = self.npc_manager.relationship_manager.get_npc_npc_affinity(npc_a, npc_b)
+            aff_level = self.npc_manager.relationship_manager.get_affinity_level(aff)
 
-    async def _generate_with_llm(self, npc_a, npc_b, info_a, info_b, aff_level, event_context) -> List[dict]:
+            if self.llm:
+                try:
+                    messages = await self._generate_with_llm(npc_a, npc_b, info_a, info_b, aff_level, event_context, recent_context)
+                except Exception as e:
+                    print(f"⚠️  LLM生成NPC对话失败: {e}，使用fallback")
+
+            if not messages:
+                messages = self._generate_fallback(npc_a, npc_b, event_context, recent_context)
+
+        # 确保所有消息都有时间戳
+        now = datetime.now().isoformat()
+        for msg in messages:
+            if "timestamp" not in msg:
+                msg["timestamp"] = now
+
+        return messages
+
+    def _build_recent_chat_context(self, npc_a: str, npc_b: str) -> str:
+        """構建「最近已聊過」上下文 — 從記憶系統中檢索（而非手動維護 history）"""
+        parts = []
+
+        # 1. ✅ 從 chat_history 提取上一次完整對話（用於連續性）
+        last_chat = None
+        for chat in reversed(self.chat_history):
+            chat_a = chat.get("npc_a", "")
+            chat_b = chat.get("npc_b", "")
+            pair = (chat_a, chat_b) if chat_a < chat_b else (chat_b, chat_a)
+            current_pair = (npc_a, npc_b) if npc_a < npc_b else (npc_b, npc_a)
+            if pair == current_pair and chat.get("messages"):
+                last_chat = chat
+                break
+
+        if last_chat:
+            msgs = last_chat["messages"]
+            lines = []
+            for m in msgs[-6:]:
+                speaker = m.get("speaker", "?")
+                content = m.get("content", "")
+                lines.append(f"  {speaker}: {content}")
+            parts.append(f"【上一次 {npc_a} 和 {npc_b} 的对话 — 这是你们上次聊的内容，请自然延续或发展话题】\n"
+                         + "\n".join(lines))
+
+        # 2. ✅ 從記憶系統檢索最近的相關對話（用於去重提示）
+        dedup_lines = []
+        for npc_name in [npc_a, npc_b]:
+            try:
+                mem_mgr = self.npc_manager.memories.get(npc_name)
+                if not mem_mgr:
+                    continue
+                recent = mem_mgr.retrieve_memories(
+                    query=f"{npc_a if npc_name == npc_b else npc_b}",
+                    memory_types=["working"],
+                    limit=3,
+                    min_importance=0.1
+                )
+                for mem in recent:
+                    short = mem.content[:80] + ("..." if len(mem.content) > 80 else "")
+                    dedup_lines.append(f"  {short}")
+            except Exception:
+                pass
+
+        if dedup_lines:
+            seen = set()
+            unique = []
+            for line in dedup_lines:
+                if line not in seen:
+                    seen.add(line)
+                    unique.append(line)
+            parts.append("【⚠️ 以下是从记忆中检索到的最近互动 — 避免完全重复】\n"
+                         + "\n".join(unique[:4]))
+
+        return "\n\n".join(parts) if parts else ""
+
+    async def _generate_with_llm(self, npc_a, npc_b, info_a, info_b, aff_level, event_context, recent_context="") -> List[dict]:
         """使用 LLM 生成对话"""
-        prompt = f"""生成两个同事之间的简短工作对话。
+        # ✅ 连续性指导：如果提供了上次对话内容，要求自然延续
+        continuity_instruction = ""
+        if recent_context and "上一次" in recent_context:
+            continuity_instruction = (
+                "- **重要**：上面提供了上一次的对话内容。请自然延续话题——"
+                "可以追问上次提到的事、补充新进展、或者顺着话题深入。"
+                "像真人同事之间的日常交谈，不要像第一次见面。\n"
+            )
+
+        prompt = f"""生成两个同事之间的简短对话。
 
 {event_context}
 【角色A】{npc_a}（{info_a.get('title', '')}）: {info_a.get('personality', '')}
 【角色B】{npc_b}（{info_b.get('title', '')}）: {info_b.get('personality', '')}
 【关系】好感度等级: {aff_level}
-
+{recent_context}
 【要求】
-- 生成 1-3 轮自然交替的对话
+- 请根据近期的上下文，自然地回复玩家/其他NPC。不要重复你已经说过的话。如果话题可以延续，请继续深入；如果话题结束，可以提出新话题
 - 每次发言 20-40 字
 - 角色保持一致的说话风格
 - 如有事件背景请围绕展开
-- 输出纯 JSON 数组格式，不要有任何其他文字
+- {continuity_instruction}- 输出纯 JSON 数组格式，不要有任何其他文字
 
 【输出格式示例】
 [
@@ -363,19 +493,22 @@ class NPCNPCChatEngine:
 
             # 去重检查
             content_str = "|".join(m.get("content", "") for m in messages)
-            if self._last_chat_content and self._jaccard_similarity(self._last_chat_content, content_str) > 0.6:
-                # 相似度过高，重新生成一次
-                messages = self._generate_fallback(npc_a, npc_b, event_context)
+            if self._would_be_duplicate(npc_a, npc_b, content_str):
+                print(f"  🚫 LLM生成内容去重拦截 [{npc_a}↔{npc_b}]: 与最近对话高度相似")
+                messages = self._generate_fallback(npc_a, npc_b, event_context, recent_context)
+                content_str = "|".join(m.get("content", "") for m in messages)
 
-            self._last_chat_content = content_str
+            # ✅ 記憶寫入由 scene_generator._save_scene_to_memory 統一處理
             return messages
 
         except Exception as e:
             print(f"  LLM对话解析失败: {e}")
             raise
 
-    def _generate_fallback(self, npc_a: str, npc_b: str, event_context: str = "") -> List[dict]:
-        """使用预设模板生成对话"""
+    def _generate_fallback(self, npc_a: str, npc_b: str, event_context: str = "", recent_context: str = "") -> List[dict]:
+        """使用预设模板生成对话，优先选择没用过的模板"""
+        import re
+
         # 根据事件关键词选择模板
         best_template = FALLBACK_DIALOGUES[0]  # default
         best_score = 0
@@ -384,12 +517,45 @@ class NPCNPCChatEngine:
             trigger = template["trigger"]
             if trigger == "default":
                 continue
-            import re
             matches = re.findall(trigger, event_context)
             score = len(matches)
             if score > best_score:
                 best_score = score
                 best_template = template
+
+        # ✅ 嘗試選一個與記憶中最近內容不重複的模板
+        recent_contents = []
+        for npc_name in [npc_a, npc_b]:
+            try:
+                mem_mgr = self.npc_manager.memories.get(npc_name)
+                if mem_mgr:
+                    recent = mem_mgr.retrieve_memories(
+                        query=f"{npc_a if npc_name == npc_b else npc_b}",
+                        memory_types=["working"],
+                        limit=3,
+                        min_importance=0.1
+                    )
+                    recent_contents.extend([m.content for m in recent])
+            except Exception:
+                pass
+
+        if recent_contents and len(FALLBACK_DIALOGUES) > 1:
+            unused = []
+            for template in FALLBACK_DIALOGUES:
+                if template["trigger"] == "default":
+                    continue
+                template_content = "|".join(
+                    f"{a}{b}" for a, b in template["rounds"]
+                )
+                is_dup = False
+                for old in recent_contents[-3:]:
+                    if self.npc_manager._jaccard_similarity(old, template_content) > 0.4:
+                        is_dup = True
+                        break
+                if not is_dup:
+                    unused.append(template)
+            if unused:
+                best_template = random.choice(unused)
 
         # 取 1-2 轮
         rounds = best_template["rounds"]
@@ -398,27 +564,14 @@ class NPCNPCChatEngine:
         messages = []
         for i in range(num_rounds):
             msg_a, msg_b = rounds[i]
-            # 简单替换事件关键词
             messages.append({"speaker": npc_a, "content": msg_a})
             messages.append({"speaker": npc_b, "content": msg_b})
 
-        self._last_chat_content = "|".join(m.get("content", "") for m in messages)
+        content_str = "|".join(m.get("content", "") for m in messages)
+        # ✅ 記憶寫入由 scene_generator._save_scene_to_memory 統一處理
         return messages
 
-    def _jaccard_similarity(self, text_a: str, text_b: str) -> float:
-        """Jaccard 相似度（基于字符 2-gram）"""
-        def get_2grams(s):
-            return set(s[i:i+2] for i in range(len(s)-1))
-
-        grams_a = get_2grams(text_a)
-        grams_b = get_2grams(text_b)
-
-        if not grams_a or not grams_b:
-            return 0.0
-
-        intersection = grams_a & grams_b
-        union = grams_a | grams_b
-        return len(intersection) / len(union) if union else 0.0
+    # _jaccard_similarity 已移至 NPCAgentManager（agents.py），此處改用 self.npc_manager._jaccard_similarity()
 
     def _update_affinity_from_chat(self, npc_a: str, npc_b: str, messages: List[dict]):
         """根据对话内容更新 NPC 间好感度"""

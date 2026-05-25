@@ -1,9 +1,7 @@
-"""NPC状态管理器 - 定时批量更新NPC对话 + NPC间聊天调度"""
+"""NPC状态管理器 - NPC间聊天调度 + 自主思考 + 感知"""
 
 import asyncio
-from datetime import datetime
-from typing import Dict, Optional
-from batch_generator import get_batch_generator
+from typing import Optional
 from npc_npc_chat import NPCNPCChatEngine
 from autonomous_thinker import AutonomousThinker
 from group_chat_engine import GroupChatEngine
@@ -14,26 +12,20 @@ from perception_engine import PerceptionEngine
 
 class NPCStateManager:
     """NPC状态管理器
-    
+
     功能:
-    1. 定时批量生成NPC对话(降低API成本)
-    2. 缓存当前NPC状态
-    3. 提供状态查询接口
+    1. NPC 间聊天调度
+    2. NPC 自主思考（主动发起对话）
+    3. NPC 环境感知
+    4. 群聊管理
     """
-    
+
     def __init__(self, update_interval: int = 30):
         """初始化状态管理器
 
         Args:
-            update_interval: 更新间隔(秒),默认30秒
+            update_interval: 保留参数（兼容性）
         """
-        self.update_interval = update_interval
-        self.batch_generator = get_batch_generator()
-
-        # 当前状态
-        self.current_dialogues: Dict[str, str] = {}
-        self.last_update: Optional[datetime] = None
-        self.next_update_time: Optional[datetime] = None
 
         # 共享实例
         npc_mgr = get_npc_manager()
@@ -61,6 +53,7 @@ class NPCStateManager:
         self.group_chat_engine = GroupChatEngine(
             npc_manager=npc_mgr, timeline_manager=tm_mgr, llm=llm
         )
+        self.group_chat_engine.scene_generator = self.scene_generator
 
         # 感知引擎
         self.perception_engine = PerceptionEngine(
@@ -69,14 +62,30 @@ class NPCStateManager:
         # 注入到 NPCAgentManager 供 chat() 使用
         npc_mgr.perception_engine = self.perception_engine
 
+        # 暂停控制
+        self._paused = False
+
         # 后台任务
-        self._update_task: Optional[asyncio.Task] = None
         self._npc_chat_task: Optional[asyncio.Task] = None
         self._think_task: Optional[asyncio.Task] = None
         self._perception_task: Optional[asyncio.Task] = None
         self._running = False
 
-        print(f"📊 NPC状态管理器初始化完成 (更新间隔: {update_interval}秒)")
+        print("📊 NPC状态管理器初始化完成")
+
+    def pause(self):
+        """暂停所有后台自动循环（NPC对话、自主思考、感知扫描）"""
+        self._paused = True
+        print("⏸️ 模拟已暂停")
+
+    def resume(self):
+        """恢复所有后台自动循环"""
+        self._paused = False
+        print("▶️ 模拟已恢复")
+
+    def is_paused(self) -> bool:
+        """查询暂停状态"""
+        return self._paused
     
     async def start(self):
         """启动后台更新任务"""
@@ -86,12 +95,6 @@ class NPCStateManager:
 
         self._running = True
         print("🚀 启动NPC状态自动更新...")
-
-        # 立即执行一次更新
-        await self._update_npc_states()
-
-        # 启动定时更新任务（独白）
-        self._update_task = asyncio.create_task(self._auto_update_loop())
 
         # 启动 NPC 间聊天检查任务
         self._npc_chat_task = asyncio.create_task(self._npc_chat_loop())
@@ -109,7 +112,7 @@ class NPCStateManager:
 
         self._running = False
 
-        for task in [self._update_task, self._npc_chat_task, self._think_task, self._perception_task]:
+        for task in [self._npc_chat_task, self._think_task, self._perception_task]:
             if task:
                 task.cancel()
                 try:
@@ -119,23 +122,14 @@ class NPCStateManager:
 
         print("🛑 NPC状态自动更新已停止")
 
-    async def _auto_update_loop(self):
-        """自动更新循环（独白生成）"""
-        while self._running:
-            try:
-                await asyncio.sleep(self.update_interval)
-                await self._update_npc_states()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                print(f"❌ 自动更新失败: {e}")
-
     async def _npc_chat_loop(self):
         """NPC 间聊天检查循环"""
         check_interval = 15  # 每 15 秒检查一次
         while self._running:
             try:
                 await asyncio.sleep(check_interval)
+                if self._paused:
+                    continue
                 chat_id = await self.npc_chat_engine.check_and_trigger()
                 if chat_id:
                     print(f"💬 NPC间对话已触发: {chat_id}")
@@ -158,6 +152,8 @@ class NPCStateManager:
         while self._running:
             try:
                 await asyncio.sleep(think_interval)
+                if self._paused:
+                    continue
                 await self.autonomous_thinker.think_all()
             except asyncio.CancelledError:
                 break
@@ -170,56 +166,13 @@ class NPCStateManager:
         while self._running:
             try:
                 await asyncio.sleep(perception_interval)
+                if self._paused:
+                    continue
                 self.perception_engine.scan_and_observe()
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 print(f"❌ 感知扫描失败: {e}")
-
-    async def _update_npc_states(self):
-        """更新NPC状态"""
-        try:
-            print(f"\n🔄 [{datetime.now().strftime('%H:%M:%S')}] 开始批量更新NPC对话...")
-            
-            # 批量生成对话
-            new_dialogues = self.batch_generator.generate_batch_dialogues()
-            
-            # 更新状态
-            self.current_dialogues = new_dialogues
-            self.last_update = datetime.now()
-            self.next_update_time = datetime.now()
-            
-            # 打印更新结果
-            print("📝 NPC对话已更新:")
-            for npc_name, dialogue in new_dialogues.items():
-                print(f"   - {npc_name}: {dialogue}")
-            
-        except Exception as e:
-            print(f"❌ 更新NPC状态失败: {e}")
-    
-    def get_current_state(self) -> Dict:
-        """获取当前状态"""
-        # 计算下次更新倒计时
-        if self.last_update:
-            elapsed = (datetime.now() - self.last_update).total_seconds()
-            next_update_in = max(0, int(self.update_interval - elapsed))
-        else:
-            next_update_in = self.update_interval
-        
-        return {
-            "dialogues": self.current_dialogues,
-            "last_update": self.last_update,
-            "next_update_in": next_update_in
-        }
-    
-    def get_npc_dialogue(self, npc_name: str) -> Optional[str]:
-        """获取指定NPC的当前对话"""
-        return self.current_dialogues.get(npc_name)
-    
-    async def force_update(self):
-        """强制立即更新"""
-        print("⚡ 强制更新NPC状态...")
-        await self._update_npc_states()
 
 # 全局单例
 _state_manager = None
