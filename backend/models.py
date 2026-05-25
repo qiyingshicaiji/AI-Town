@@ -43,25 +43,6 @@ class NPCInfo(BaseModel):
     activity: str = Field(..., description="当前活动")
     available: bool = Field(default=True, description="是否可对话")
 
-class NPCStatusResponse(BaseModel):
-    """NPC状态响应"""
-    dialogues: Dict[str, str] = Field(..., description="NPC当前对话内容")
-    last_update: Optional[datetime] = Field(None, description="上次更新时间")
-    next_update_in: int = Field(..., description="下次更新倒计时(秒)")
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "dialogues": {
-                    "张三": "终于把这个bug修复了,测试通过!",
-                    "李四": "下周的产品评审会需要准备一下资料。",
-                    "王五": "这个界面的配色方案还需要优化一下。"
-                },
-                "last_update": "2024-01-15T10:30:00",
-                "next_update_in": 25
-            }
-        }
-
 class NPCListResponse(BaseModel):
     """NPC列表响应"""
     npcs: List[NPCInfo] = Field(..., description="NPC列表")
@@ -180,4 +161,22 @@ class NPCNPCChatStatusResponse(BaseModel):
     active_chats: List[NPCNPCChatRecord] = Field(default_factory=list, description="活跃对话")
     history: List[NPCNPCChatRecord] = Field(default_factory=list, description="历史对话")
     cooldowns: Dict[str, int] = Field(default_factory=dict, description="冷却剩余秒数")
+
+
+class PendingMessage(BaseModel):
+    """待处理的主动消息"""
+    npc_name: str = Field(..., description="NPC名称")
+    content: str = Field(..., description="消息内容")
+    timestamp: str = Field(..., description="时间戳")
+
+
+class PendingMessagesResponse(BaseModel):
+    """待处理消息响应"""
+    messages: List[dict] = Field(default_factory=list, description="待处理消息列表")
+
+
+class AckPendingRequest(BaseModel):
+    """确认处理消息请求"""
+    npc_name: Optional[str] = Field(None, description="如果指定，仅确认该NPC的消息")
+    message_keys: Optional[List[str]] = Field(None, description="要确认的特定消息key列表")
 

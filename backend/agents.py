@@ -4,6 +4,8 @@ import sys
 import os
 import asyncio
 import threading
+import random
+import re
 from datetime import datetime, timedelta
 
 # 添加HelloAgents到Python路径
@@ -11,7 +13,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'HelloAgents'))
 
 from hello_agents import SimpleAgent, HelloAgentsLLM
 from hello_agents.memory import MemoryManager, MemoryConfig, MemoryItem
+from hello_agents.memory.embedding import get_text_embedder
 from typing import Dict, List, Optional
+import numpy as np
 from relationship_manager import RelationshipManager
 from timeline_manager import get_timeline_manager
 from config import settings
@@ -132,7 +136,7 @@ def create_system_prompt(name: str, role: Dict[str, str]) -> str:
 【重要准则】
 1. 性格是你的核心驱动力。工作只是背景，不是谈话的目的
 2. 用第一人称"我"说话，像真人一样自然
-3. 允许跑题、闲聊、吐槽、开玩笑——这是正常人的对话方式
+3. 允许跑题、闲聊、吐槽、开玩笑——这是正常人的对话方式,但是不要重复已经充分讨论过的话题和说过的话
 4. 开心的事会让你话变多，不舒服的事会让你沉默或冷淡
 5. 好感度会影响你对玩家的态度（亲切/客气/疏离）
 6. 过往的记忆会不经意被你提起——像真人的回忆那样自然
@@ -222,11 +226,11 @@ class NPCAgentManager:
         # 配置记忆系统
         memory_config = MemoryConfig(
             storage_path=memory_dir,
-            working_memory_capacity=10,  # 最近10条对话
-            working_memory_tokens=2000,  # 最多2000个token
+            working_memory_capacity=50,  # 最近20条对话
+            working_memory_tokens=4000,  # 最多4000个token
             episodic_memory_capacity=150,  # 最多150条长期记忆
             enable_forgetting=True,  # 启用遗忘机制
-            forgetting_threshold=0.3  # 重要性低于0.3的记忆会被遗忘
+            forgetting_threshold=0.4  # 重要性低于0.4的记忆会被遗忘
         )
 
         # 创建记忆管理器
@@ -363,9 +367,9 @@ class NPCAgentManager:
             if memory_manager:
                 relevant_memories = memory_manager.retrieve_memories(
                     query=message,
-                    memory_types=["working", "episodic"],
-                    limit=5,
-                    min_importance=0.3
+                    memory_types=["working", "episodic","perceptual"],
+                    limit=10,
+                    min_importance=0.4
                 )
                 log_memory_retrieval(npc_name, len(relevant_memories), relevant_memories)
 
@@ -511,7 +515,7 @@ class NPCAgentManager:
         memory_manager.add_memory(
             content=f"玩家说: {player_message}",
             memory_type="working",  # 先存入工作记忆
-            importance=0.5,  # 中等重要性
+            importance=0.6,  # 中等重要性
             metadata={
                 "speaker": "player",
                 "player_id": player_id,
@@ -532,7 +536,7 @@ class NPCAgentManager:
         memory_manager.add_memory(
             content=f"我说: {npc_response}",
             memory_type="working",  # 先存入工作记忆
-            importance=0.6,  # 稍高重要性
+            importance=0.5,  # 稍高重要性
             metadata={
                 "speaker": npc_name,
                 "player_id": player_id,
@@ -569,8 +573,415 @@ class NPCAgentManager:
                 )
                 if consolidated > 0:
                     print(f"  🔄 {npc_name}: 整合了 {consolidated} 条记忆 (working→episodic)")
+                    # 低重要性記憶遺忘
+                    forgotten = memory_manager.forget_low_importance(
+                        memory_type="working",
+                        importance_threshold=0.4
+                    )
+                    if forgotten > 0:
+                        print(f"  🧹 {npc_name}: 遗忘了 {forgotten} 条低重要性工作记忆")
         except Exception as e:
             print(f"  ⚠️ {npc_name} 记忆整合检查失败: {e}")
+
+    def record_npc_speech(
+        self,
+        npc_name: str,
+        content: str,
+        listeners: List[str] = None,
+        context_type: str = "npc_npc_chat",
+        importance: float = 0.5
+    ):
+        """統一記憶寫入：NPC 發言後寫入說話者 + 聽眾的工作記憶
+
+        這是所有 NPC 發言的統一寫入點，無論是：
+        - NPC-NPC 對話
+        - 群聊搶話
+        - NPC 主動發言
+        - 與玩家的 1v1 對話（已在 chat() 中處理）
+
+        Args:
+            npc_name: 發言的 NPC 名稱
+            content: 發言內容
+            listeners: 聽眾 NPC 名稱列表（也會寫入他們的記憶）
+            context_type: 上下文類型（用於記憶 metadata）
+            importance: 記憶重要性（0-1）
+        """
+        current_time = datetime.now()
+        timeline_id = None
+        try:
+            timeline_id = self.timeline_manager._active_timeline_id
+        except Exception:
+            pass
+
+        listeners = listeners or []
+
+        # 1. 寫入說話者自己的工作記憶
+        mem_mgr = self.memories.get(npc_name)
+        if mem_mgr:
+            try:
+                mem_mgr.add_memory(
+                    content=f"我说: {content}",
+                    memory_type="working",
+                    importance=importance,
+                    metadata={
+                        "speaker": npc_name,
+                        "listeners": listeners,
+                        "context_type": context_type,
+                        "timestamp": current_time.isoformat(),
+                        "timeline_id": timeline_id,
+                    }
+                )
+            except Exception as e:
+                print(f"  ⚠️ 寫入 {npc_name} 記憶失敗: {e}")
+
+        # 2. 寫入每個聽眾的工作記憶
+        for listener in listeners:
+            if listener == npc_name:
+                continue
+            listener_mem = self.memories.get(listener)
+            if not listener_mem:
+                continue
+            try:
+                listener_mem.add_memory(
+                    content=f"{npc_name}说: {content}",
+                    memory_type="working",
+                    importance=importance,
+                    metadata={
+                        "speaker": npc_name,
+                        "listener": listener,
+                        "context_type": context_type,
+                        "timestamp": current_time.isoformat(),
+                        "timeline_id": timeline_id,
+                    }
+                )
+            except Exception as e:
+                print(f"  ⚠️ 寫入 {listener} 記憶失敗: {e}")
+
+        # 3. 檢查是否需要整合（說話者 + 聽眾）
+        self._check_and_consolidate(npc_name)
+        for listener in listeners:
+            if listener != npc_name:
+                self._check_and_consolidate(listener)
+
+    # ==================== 統一發言生成器 ====================
+
+    # 中文停用词（用于关键词指纹提取）
+    _STOP_WORDS = set("嗨啊呢吧吗了的是我你他她它很都也才就再在到和与或但而因为所以如果虽然然而可以能够应该会可能需要必须已经正在将把被从对向关于".split())
+
+    def _jaccard_similarity(self, text_a: str, text_b: str) -> float:
+        """2-gram Jaccard 相似度（共用工具方法）"""
+        def get_2grams(s):
+            return set(s[i:i+2] for i in range(len(s)-1))
+        grams_a = get_2grams(text_a)
+        grams_b = get_2grams(text_b)
+        if not grams_a or not grams_b:
+            return 0.0
+        intersection = grams_a & grams_b
+        union = grams_a | grams_b
+        return len(intersection) / len(union) if union else 0.0
+
+    def _cosine_similarity(self, text_a: str, text_b: str) -> float:
+        """語義向量餘弦相似度（0-1）"""
+        try:
+            embedder = get_text_embedder()
+            vec_a = np.array(embedder.encode(text_a))
+            vec_b = np.array(embedder.encode(text_b))
+            dot = np.dot(vec_a, vec_b)
+            norm = np.linalg.norm(vec_a) * np.linalg.norm(vec_b)
+            return float(dot / norm) if norm > 0 else 0.0
+        except Exception:
+            return 0.0
+
+    def _keyword_overlap(self, text_a: str, text_b: str) -> float:
+        """實詞集合重疊率（0-1）"""
+        def extract_keywords(s):
+            words = set()
+            for ch in s:
+                if '一' <= ch <= '鿿' and ch not in self._STOP_WORDS:
+                    words.add(ch)
+            # 提取2-gram实词组合
+            chars = [ch for ch in s if '一' <= ch <= '鿿' and ch not in self._STOP_WORDS]
+            for i in range(len(chars) - 1):
+                words.add(chars[i] + chars[i + 1])
+            return words
+        kw_a = extract_keywords(text_a)
+        kw_b = extract_keywords(text_b)
+        if not kw_a or not kw_b:
+            return 0.0
+        return len(kw_a & kw_b) / len(kw_a | kw_b)
+
+    def _is_speech_duplicate(self, npc_name: str, new_content: str, threshold: float = 0.75) -> bool:
+        """檢查新發言是否與記憶中最近的發言高度重複
+
+        三維度檢測（任一命中即攔截）：
+        1. Jaccard 2-gram 相似度 > threshold
+        2. 語義向量餘弦相似度 > 0.85
+        3. 實詞關鍵詞重疊率 > 0.6
+        """
+        try:
+            mem_mgr = self.memories.get(npc_name)
+            if not mem_mgr:
+                return False
+            recent = mem_mgr.retrieve_memories(
+                query="我说",
+                memory_types=["working"],
+                limit=5,
+                min_importance=0.1
+            )
+            for mem in recent:
+                old_content = mem.content
+                if old_content.startswith("我说: "):
+                    old_content = old_content[4:]
+
+                # 维度1: Jaccard 2-gram
+                if self._jaccard_similarity(old_content, new_content) > threshold:
+                    return True
+
+                # 维度2: 語義向量相似度
+                if self._cosine_similarity(old_content, new_content) > 0.85:
+                    return True
+
+                # 维度3: 關鍵詞重疊（僅對 < 30 字的短消息生效，長消息 Jaccard 已足夠）
+                if len(new_content) < 30:
+                    if self._keyword_overlap(old_content, new_content) > 0.6:
+                        return True
+        except Exception:
+            pass
+        return False
+
+    # 通用话题种子池（retry 时随机抽取以引导新方向）
+    _TOPIC_SEED_POOL = ["天气", "午餐", "项目", "周末计划", "新技术", "兴趣爱好",
+                        "新闻热点", "电影", "旅行", "运动健身", "读书", "音乐",
+                        "美食", "宠物", "游戏", "职场趣事", "家庭", "节日"]
+
+    def _get_topic_seeds(self, npc_name: str = "", count: int = 3) -> str:
+        """從事件/性格/通用池抽取隨機話題種子，用於 retry 時引導新方向"""
+        candidates = list(self._TOPIC_SEED_POOL)
+
+        # 注入今日事件中的名詞
+        try:
+            event = self.timeline_manager.get_event_context()
+            if event:
+                # 簡單提取中文詞（2-4字）
+                zh_words = re.findall(r'[一-鿿]{2,4}', event)
+                candidates.extend(zh_words[:5])
+        except Exception:
+            pass
+
+        # 注入 NPC 性格關鍵詞
+        if npc_name:
+            try:
+                from agents import NPC_ROLES
+                role = NPC_ROLES.get(npc_name, {})
+                for q in role.get("quirks", [])[:2]:
+                    candidates.append(q)
+                for trigger_list in role.get("emotional_triggers", {}).values():
+                    for t in trigger_list[:2]:
+                        candidates.append(t)
+            except Exception:
+                pass
+
+        # 去重並隨機抽取
+        seen = set()
+        unique = []
+        for c in candidates:
+            c = str(c).strip()
+            if c and c not in seen and len(c) <= 6:
+                seen.add(c)
+                unique.append(c)
+
+        if not unique:
+            return "天氣、午餐"
+        seeds = random.sample(unique, min(count, len(unique)))
+        return "、".join(seeds)
+
+    async def generate_npc_speech(
+        self,
+        npc_name: str,
+        context: str = "",
+        context_type: str = "对话",
+        listeners: Optional[List[str]] = None,
+        temperature: float = 1.0,
+        max_tokens: int = 128,
+        instruction_override: Optional[str] = None,
+        extra_context: str = "",
+        dedup_threshold: float = 0.75,
+        importance: float = 0.5,
+    ) -> Optional[str]:
+        """統一的 NPC 發言生成入口
+
+        所有 NPC 發言都應通過此方法生成，確保：
+        - 使用持久化 Agent（帶完整人格 system_prompt）
+        - 從記憶系統檢索上下文 + 防重複
+        - 生成後自動寫入記憶 + 觸發整合
+
+        Args:
+            npc_name: 發言的 NPC 名稱
+            context: 當前場景上下文（如「當前群聊記錄」或「你和玩家的關係」）
+            context_type: 場景類型（"主动发起" / "群聊抢话" / "NPC间对话" / "对话"）
+            listeners: 聽眾 NPC 名稱列表（也會寫入他們的記憶）
+            temperature: LLM 溫度（預設 1.0 增加多樣性）
+            instruction_override: 自訂指令（覆蓋默認的 context_type 指令）
+        """
+        if npc_name not in self.agents or self.agents[npc_name] is None:
+            return None
+
+        listeners = listeners or []
+        info = self.get_npc_info(npc_name)
+        if not info:
+            return None
+
+        # 1. 今日事件
+        event_text = ""
+        try:
+            event = self.timeline_manager.get_event_context()
+            if event:
+                event_text = f"【今日事件】{event}\n"
+        except Exception:
+            pass
+
+        # 2. 好感度
+        affinity_text = ""
+        if self.relationship_manager:
+            try:
+                aff = self.relationship_manager.get_affinity(npc_name)
+                level = self.relationship_manager.get_affinity_level(aff)
+                affinity_text = f"【關係狀態】好感度: {aff:.0f} ({level})\n"
+            except Exception:
+                pass
+
+        # 3. 人格上下文（從 NPC_ROLES 提取，補足持久化 Agent 的 system_prompt）
+        from agents import NPC_ROLES
+        full_role = NPC_ROLES.get(npc_name, {})
+        personality = full_role.get("core_personality", info.get("personality", ""))
+        speak_style = full_role.get("speaking_style", "")
+        quirks = full_role.get("quirks", [])
+        personality_text = f"【你的性格】{personality}\n【說話風格】{speak_style}"
+        if quirks:
+            personality_text += f"\n【小習慣】{'; '.join(quirks[:3])}"
+
+        # 4. 記憶檢索（上下文）— 使用 context_type 驅動的語義查詢詞
+        memory_text = ""
+        try:
+            mem_mgr = self.memories.get(npc_name)
+            if mem_mgr:
+                # context_type 驅動的查詢模板，替換無意義的 context[:60]
+                query_templates = {
+                    "主动发起": "聊天 问候 话题 日常 工作 天气 最近",
+                    "群聊抢话": context[-125:] if context else "",
+                    "NPC间对话": context[-125:] if context else "",
+                    "对话": context[-125:] if context else "",
+                }
+                query = query_templates.get(context_type, context[-125:] if context else "")
+                memories = mem_mgr.retrieve_memories(
+                    query=query,
+                    memory_types=["working", "episodic"],
+                    limit=10,
+                    min_importance=0.3
+                )
+                if memories:
+                    mem_lines = [f"  - {m.content[:100]}" for m in memories]
+                    memory_text = "【相關記憶 — 可以自然地延續或提及】\n" + "\n".join(mem_lines) + "\n"
+        except Exception:
+            pass
+
+        # 5. 防重複（檢索最近說過的話）
+        anti_repeat_text = ""
+        try:
+            mem_mgr = self.memories.get(npc_name)
+            if mem_mgr:
+                recent_speeches = mem_mgr.retrieve_memories(
+                    query="我说",
+                    memory_types=["working"],
+                    limit=10,
+                    min_importance=0.1
+                )
+                if recent_speeches:
+                    speech_lines = [f"  - {m.content[:80]}" for m in recent_speeches[:3]]
+                    anti_repeat_text = "【⚠️ 避免重複 — 你最近說過的話】\n" + "\n".join(speech_lines) + "\n"
+        except Exception:
+            pass
+
+        # 6. 指令
+        if instruction_override:
+            instruction = instruction_override
+        else:
+            instructions = {
+                "主动发起": "你決定主動和辦公室的同事（玩家）打個招呼或聊點什麼。請用簡短的主動發言開頭（20-40字），像微信消息一樣自然隨意。可以提及今日事件、最近對話、日常問候。只說一句話，不要引號。",
+                "群聊抢话": "說一句自然的發言（20-40字）。不要重複自己或他人已經說過的話，每次發言要有新觀點或新角度。如果記憶中有相關的內容，可以自然地提及。不要引號，直接用日常聊天語氣。",
+                "NPC间对话": "自然地回應對方，繼續對話（20-40字）。可以提及之前聊過的話題、今日事件，或者自然地岔到新話題。不要引號。",
+            }
+            instruction = instructions.get(context_type, "請用你的性格和風格回應（20-40字）。不說教，不要引號，自然口語化。")
+
+        # 7. 構建 prompt
+        prompt_parts = []
+        if event_text:
+            prompt_parts.append(event_text)
+        if affinity_text:
+            prompt_parts.append(affinity_text)
+        if extra_context:
+            prompt_parts.append(extra_context)
+        prompt_parts.append(personality_text)
+        if context:
+            prompt_parts.append(f"【當前場景】\n{context}")
+        if memory_text:
+            prompt_parts.append(memory_text)
+        if anti_repeat_text:
+            prompt_parts.append(anti_repeat_text)
+        prompt_parts.append(instruction)
+
+        prompt = "\n\n".join(prompt_parts)
+
+        # 8. 調用持久化 Agent
+        content = None
+        agent = self.agents[npc_name]
+        try:
+            response = await asyncio.to_thread(agent.run, prompt, temperature=temperature)
+            content = response.strip()
+            # 清理引號和前綴
+            content = re.sub(r'^["\'\`＂＇]|["\'\`＂＇]$', '', content)
+            content = re.sub(r'^(我说的?[:：]?\s*)|(我说[:：]?\s*)', '', content)
+            content = content[:max_tokens] if content else None
+        except Exception as e:
+            print(f"  ⚠️  {npc_name} 統一發言生成失敗: {e}")
+
+        if not content:
+            return None
+
+        # 9. 去重檢查 → retry with topic seeds
+        if self._is_speech_duplicate(npc_name, content, threshold=dedup_threshold):
+            topic_seeds = self._get_topic_seeds(npc_name, count=3)
+            print(f"  🚫 去重攔截 [{npc_name}]: 與最近發言高度相似，retry with seeds: {topic_seeds}...")
+            try:
+                retry_prompt = (
+                    f"{prompt}\n\n"
+                    f"（請完全避開你剛才說過的內容。圍繞以下話題重新發言：{topic_seeds}。"
+                    f"不要重複任何之前列出的句子。）"
+                )
+                response = await asyncio.to_thread(agent.run, retry_prompt, temperature=min(temperature + 0.2, 1.5))
+                retry_content = response.strip()
+                retry_content = re.sub(r'^["\'\`＂＇]|["\'\`＂＇]$', '', retry_content)
+                retry_content = re.sub(r'^(我说的?[:：]?\s*)|(我说[:：]?\s*)', '', retry_content)
+                if retry_content and not self._is_speech_duplicate(npc_name, retry_content, threshold=dedup_threshold):
+                    content = retry_content[:max_tokens]
+                    print(f"     → retry 成功 (话题: {topic_seeds})")
+                else:
+                    # retry 仍重複，放棄本次發言
+                    print(f"     → retry 仍重複，放棄發言（沉默）")
+                    return None
+            except Exception:
+                pass
+
+        # 10. 寫入記憶
+        self.record_npc_speech(
+            npc_name=npc_name,
+            content=content,
+            listeners=listeners,
+            context_type=context_type,
+            importance=importance
+        )
+
+        return content
 
     async def group_chat(self, npc_names: List[str], message: str, player_id: str = "player") -> dict:
         """群聊：同时与多个 NPC 对话（并发控制 + 部分失败容错）

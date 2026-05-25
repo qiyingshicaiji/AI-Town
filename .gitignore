@@ -6,6 +6,7 @@
 .env.local
 .env
 backend/.env.local
+.claude
 
 # Python
 __pycache__/
@@ -35,6 +36,7 @@ backend/logs/*.log
 .idea/
 *.swp
 *.swo
+.claude
 *~
 
 # OS

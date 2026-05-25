@@ -2,8 +2,6 @@
 
 import asyncio
 import random
-import re
-import json
 from typing import Dict, List, Optional, AsyncGenerator
 
 
@@ -24,7 +22,12 @@ class GroupChatEngine:
         self.npc_manager = npc_manager
         self.timeline_manager = timeline_manager
         self.llm = llm
-        print("🎯 群聊抢话引擎 v2 已初始化 (启发式意愿 + 流式返回)")
+        self.scene_generator = None  # 由 state_manager 注入
+
+        # ✅ 最近一场抢话的完整记录（用于连续性上下文）
+        self._last_contention: Optional[List[dict]] = None
+
+        print("🎯 群聊抢话引擎 v3 已初始化 (統ㄧ記憶寫入 + 内容去重)")
 
     # ==================== Streaming API ====================
 
@@ -85,6 +88,8 @@ class GroupChatEngine:
             await asyncio.sleep(0.3)
 
         yield {"type": "done", "reason": "达到最大轮次" if len(rounds) >= max_r else "对话结束", "rounds": rounds}
+        # ✅ 记录本场抢话，供下次使用做连续性参考
+        self._record_contention_session(rounds)
 
     # ==================== Non-streaming (backward compat) ====================
 
@@ -144,8 +149,8 @@ class GroupChatEngine:
         if event and npc_name in event:
             score += 3
 
-        # 因素6: 随机因子 (模拟真实对话的不确定性)
-        score += random.randint(-1, 2)
+        # 因素6: 随机因子 (模拟真实对话的不确定性，扩大范围避免总是同一人发言)
+        score += random.randint(-3, 5)
 
         return max(0, min(10, score))
 
@@ -165,40 +170,39 @@ class GroupChatEngine:
     # ==================== Speech Generation ====================
 
     async def _generate_speech_fast(self, npc_name, context, history):
+        """生成单个 NPC 的抢话发言 — 使用统一的 generate_npc_speech"""
         info = self.npc_manager.get_npc_info(npc_name)
         if not info:
             return None
 
-        event = self.timeline_manager.get_event_context()
-        event_text = f"今日事件: {event}\n" if event else ""
-
-        # 构建简洁 prompt
-        recent = ""
+        # 當前群聊上下文
+        ctx_parts = []
         if history:
-            recent = "最近发言:\n" + "\n".join(
-                f"  {r['speaker']}: {r['content']}" for r in history[-3:]
-            ) + "\n"
+            ctx_parts.append("\n".join(
+                f"  {r['speaker']}: {r['content']}" for r in history[-10:]
+            ))
 
-        prompt = f"""{event_text}{recent}
-你是{npc_name}（{info.get('title', '')}），性格{info.get('personality', '')}。
-对群聊话题说一句自然的发言（20-40字），不要引号："""
+        # 上次搶話結尾（連續性）
+        extra = ""
+        if self._last_contention:
+            last_lines = [f"  {r['speaker']}: {r['content']}"
+                          for r in self._last_contention[-4:]]
+            if last_lines:
+                extra = "【上次群聊的结尾 — 可以自然延续或提及】\n" + "\n".join(last_lines)
 
-        if self.llm:
-            try:
-                from hello_agents import SimpleAgent
-                agent = SimpleAgent(
-                    name=f"Speaker_{npc_name}", llm=self.llm,
-                    system_prompt="你是群聊参与者。根据上下文说一句自然的发言，20-40字，不要引号。"
-                )
-                response = agent.run(prompt)
-                content = response.strip()
-                content = re.sub(r'^["\'\`＂＇]|["\'\`＂＇]$', '', content)
-                content = re.sub(r'^(我说的?[:：]?\s*)|(我说[:：]?\s*)', '', content)
-                return content[:100] or f"嗯，有道理。"
-            except Exception as e:
-                print(f"  ⚠️  {npc_name} 发言生成失败: {e}")
+        listeners = [n for n in self.npc_manager.agents.keys() if n != npc_name]
 
-        return random.choice([
-            "嗯，我觉得有道理。", "是的，我也是这么想的。",
-            "这个话题挺有意思的。", f"从{info.get('title', '')}的角度看，确实如此。",
-        ])
+        return await self.npc_manager.generate_npc_speech(
+            npc_name=npc_name,
+            context="\n".join(ctx_parts),
+            context_type="群聊抢话",
+            listeners=listeners,
+            temperature=1.0,
+            importance=0.5,
+            extra_context=extra,
+        )
+
+    def _record_contention_session(self, rounds: List[dict]):
+        """记录整场抢话，供下次抢话作为连续性参考"""
+        if rounds:
+            self._last_contention = list(rounds)  # 深拷贝
