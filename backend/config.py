@@ -18,7 +18,7 @@ class Settings:
     NPC_STATE_TIMEOUT_CHATTING = 300  # 玩家对话超时(秒)
     NPC_STATE_TIMEOUT_BUSY = 60  # NPC间对话超时(秒)
     NPC_STATE_SCAN_INTERVAL = 10  # 状态超时扫描间隔(秒)
-    NPC_NPC_CHAT_MAX_DAILY = 50  # NPC间聊天每日最大LLM调用次数
+    NPC_NPC_CHAT_MAX_DAILY = 100  # NPC间聊天每日最大LLM调用次数
     
     # LLM配置 (从环境变量读取)
     # HelloAgents框架使用自定义LLM配置,不需要OPENAI_API_KEY

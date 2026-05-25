@@ -16,6 +16,14 @@ const newGroupModal = document.getElementById('newGroupModal');
 const groupNpcCheckboxes = document.getElementById('groupNpcCheckboxes');
 const newGroupConfirm = document.getElementById('newGroupConfirm');
 const newGroupCancel = document.getElementById('newGroupCancel');
+const pauseBtn = document.getElementById('pauseBtn');
+const newNpcChatBtn = document.getElementById('newNpcChatBtn');
+const newNpcChatModal = document.getElementById('newNpcChatModal');
+const npcChatSelectA = document.getElementById('npcChatSelectA');
+const npcChatSelectB = document.getElementById('npcChatSelectB');
+const npcChatHint = document.getElementById('npcChatHint');
+const newNpcChatConfirm = document.getElementById('newNpcChatConfirm');
+const newNpcChatCancel = document.getElementById('newNpcChatCancel');
 const connectionStatus = document.getElementById('connectionStatus');
 const connectionText = document.getElementById('connectionText');
 const idleCountEl = document.getElementById('idleCount');
@@ -86,6 +94,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     renderConvList();
 
     setConnectionStatus(true);
+    syncPauseState();
     startPolling();
     console.log('🏙 AI-Town v2 已就绪');
 });
@@ -105,10 +114,19 @@ function setupEventListeners() {
     newGroupCancel.addEventListener('click', () => newGroupModal.style.display = 'none');
     newGroupConfirm.addEventListener('click', createGroupChat);
 
+    // Pause / Resume simulation
+    pauseBtn.addEventListener('click', togglePause);
+
+    // NPC-NPC chat modal
+    newNpcChatBtn.addEventListener('click', openNewNpcChatModal);
+    newNpcChatCancel.addEventListener('click', () => newNpcChatModal.style.display = 'none');
+    newNpcChatConfirm.addEventListener('click', createNpcNpcChat);
+
     // Escape to close modals
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
             newGroupModal.style.display = 'none';
+            newNpcChatModal.style.display = 'none';
             if (!godPanel.classList.contains('collapsed')) {
                 godPanel.classList.add('collapsed');
                 godPanelToggle.textContent = '⚡ 上帝界面';
@@ -129,6 +147,122 @@ function setupEventListeners() {
         document.getElementById('convSidebar').classList.remove('open');
         sidebarBackdrop.classList.remove('open');
     });
+}
+
+// ==================== Pause / Resume ====================
+
+async function togglePause() {
+    try {
+        const status = await getSimulationStatus();
+        if (status.paused) {
+            await resumeSimulation();
+            pauseBtn.textContent = '⏸ 暂停';
+            pauseBtn.classList.remove('paused');
+        } else {
+            await pauseSimulation();
+            pauseBtn.textContent = '▶ 恢复';
+            pauseBtn.classList.add('paused');
+        }
+    } catch (e) {
+        console.error('暂停切换失败:', e);
+    }
+}
+
+async function syncPauseState() {
+    try {
+        const status = await getSimulationStatus();
+        if (status.paused) {
+            pauseBtn.textContent = '▶ 恢复';
+            pauseBtn.classList.add('paused');
+        } else {
+            pauseBtn.textContent = '⏸ 暂停';
+            pauseBtn.classList.remove('paused');
+        }
+    } catch (e) { /* silent */ }
+}
+
+// ==================== NPC-NPC Chat Modal ====================
+
+function openNewNpcChatModal() {
+    const options = allNpcs.map(n => `<option value="${n.name}">${n.name} (${n.title || ''})</option>`).join('');
+    npcChatSelectA.innerHTML = '<option value="">-- 选择NPC A --</option>' + options;
+    npcChatSelectB.innerHTML = '<option value="">-- 选择NPC B --</option>' + options;
+    npcChatHint.textContent = '';
+    newNpcChatModal.style.display = 'flex';
+}
+
+async function createNpcNpcChat() {
+    const a = npcChatSelectA.value;
+    const b = npcChatSelectB.value;
+
+    if (!a || !b) {
+        npcChatHint.textContent = '请选择两个NPC';
+        return;
+    }
+    if (a === b) {
+        npcChatHint.textContent = '请选择两个不同的NPC';
+        return;
+    }
+
+    newNpcChatModal.style.display = 'none';
+
+    try {
+        const result = await triggerNpcNpcChat(a, b);
+        console.log('NPC对话已触发:', result);
+
+        // Open the read-only NPC-NPC conversation
+        const convId = makeNpcNpcConvId(a, b);
+        if (!getConversation(convId)) {
+            upsertConversation({
+                id: convId, type: 'npcnpc',
+                name: `${a} ↔ ${b}`,
+                participants: [a, b],
+                lastMsg: '', lastTime: new Date().toISOString(), unread: 0
+            });
+        }
+        renderConvList();
+        openConversation(convId);
+    } catch (e) {
+        if (e.status === 409) {
+            alert('已有对话正在进行，请等待结束后再试');
+        } else {
+            alert(`触发失败: ${e.message || '未知错误'}`);
+        }
+    }
+}
+
+// ==================== Force NPC Initiate ====================
+
+async function handleInitiateClick(npcName, event) {
+    event.stopPropagation();
+    try {
+        const msg = await initiateNpcChat(npcName);
+        console.log(`${npcName} 主动搭话:`, msg);
+
+        const convId = make1v1ConvId(npcName);
+        if (!getConversation(convId)) {
+            upsertConversation({
+                id: convId, type: '1v1', name: npcName,
+                participants: [npcName],
+                lastMsg: '', lastTime: new Date().toISOString(), unread: 0
+            });
+        }
+
+        appendMessage(convId, {
+            sender: npcName,
+            content: msg.content,
+            time: msg.timestamp || new Date().toISOString()
+        });
+
+        renderConvList();
+        if (currentConvId === convId) {
+            renderMessages(loadMessages(convId));
+        } else {
+            openConversation(convId);
+        }
+    } catch (e) {
+        console.error('强制搭话失败:', e);
+    }
 }
 
 // ==================== NPC Loading ====================
@@ -179,6 +313,10 @@ function renderConvList() {
         const timeStr = c.lastTime ? formatTimeStr(c.lastTime) : '';
         const hasUnread = (c.unread || 0) > 0;
 
+        const initiateBtn = c.type === '1v1'
+            ? `<button class="btn-initiate" onclick="handleInitiateClick('${escapeHtml(c.name)}', event)" title="让NPC主动搭话">🔔</button>`
+            : '';
+
         return `
         <div class="conv-item ${c.id === currentConvId ? 'active' : ''}" onclick="openConversation('${c.id}')" data-convid="${c.id}">
             <div class="conv-avatar ${avatarClass}">${avatarText}</div>
@@ -189,6 +327,7 @@ function renderConvList() {
             <div class="conv-meta">
                 <div class="conv-time">${timeStr}</div>
                 ${hasUnread ? `<span class="conv-unread">${c.unread}</span>` : ''}
+                ${initiateBtn}
             </div>
         </div>`;
     }).join('');
@@ -309,25 +448,41 @@ function renderMessages(msgs) {
         return;
     }
 
-    msgs.forEach(msg => {
+    let lastDateKey = '';
+    msgs.forEach((msg, idx) => {
         if (msg.type === 'system') {
-            chatMessages.innerHTML += `<div class="message-time">${escapeHtml(msg.content)}</div>`;
-        } else {
-            const isPlayer = msg.sender === 'player';
-            const name = msg.sender || 'unknown';
-            const initial = isPlayer ? '我' : (name[0] || '?');
-            const avatarClass = isPlayer ? 'player' : (name === '张三' ? 'npc-zhang' : name === '李四' ? 'npc-li' : 'npc-wang');
-            const rowClass = isPlayer ? 'self' : 'other';
-
-            chatMessages.innerHTML += `
-            <div class="message-row ${rowClass}">
-                <div class="message-avatar ${avatarClass}">${initial}</div>
-                <div class="message-body">
-                    ${!isPlayer ? `<span class="message-sender">${escapeHtml(name)}</span>` : ''}
-                    <div class="message-bubble">${escapeHtml(msg.content)}</div>
-                </div>
-            </div>`;
+            chatMessages.innerHTML += `<div class="message-date-separator">${escapeHtml(msg.content)}</div>`;
+            return;
         }
+
+        // Date separator: insert when crossing a day boundary
+        const msgDateKey = msg.time ? msg.time.substring(0, 10) : '';
+        if (msgDateKey && msgDateKey !== lastDateKey) {
+            lastDateKey = msgDateKey;
+            const label = formatDateSeparator(msg.time);
+            if (label) {
+                chatMessages.innerHTML += `<div class="message-date-separator">──── ${label} ────</div>`;
+            }
+        }
+
+        const isPlayer = msg.sender === 'player';
+        const name = msg.sender || 'unknown';
+        const initial = isPlayer ? '我' : (name[0] || '?');
+        const avatarClass = isPlayer ? 'player' : (name === '张三' ? 'npc-zhang' : name === '李四' ? 'npc-li' : 'npc-wang');
+        const rowClass = isPlayer ? 'self' : 'other';
+        const timeDisplay = formatMessageTime(msg.time);
+
+        chatMessages.innerHTML += `
+        <div class="message-row ${rowClass}">
+            <div class="message-avatar ${avatarClass}">${initial}</div>
+            <div class="message-body">
+                ${!isPlayer ? `<span class="message-sender">${escapeHtml(name)}</span>` : ''}
+                <div class="message-bubble-wrapper">
+                    <div class="message-bubble">${escapeHtml(msg.content)}</div>
+                    ${timeDisplay ? `<span class="message-time-inline">${timeDisplay}</span>` : ''}
+                </div>
+            </div>
+        </div>`;
     });
 
     chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -668,8 +823,9 @@ function startPolling() {
         const proactiveCount = await checkProactiveMessages();
         if (proactiveCount > 0) pollHadData = true;
 
-        // 定期刷新好感度（每 30 秒）
+        // 定期刷新暂停状态和好感度（每 30 秒）
         if (Date.now() - lastAffinityRefresh > 30000) {
+            syncPauseState();
             lastAffinityRefresh = Date.now();
             try {
                 const results = await Promise.all(allNpcs.map(n => fetchNpcAffinity(n.name).catch(() => null)));
@@ -805,9 +961,50 @@ function formatTimeStr(isoStr) {
     return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
+function formatMessageTime(isoStr) {
+    if (!isoStr) return '';
+    const d = new Date(isoStr);
+    const now = new Date();
+    const pad = n => n.toString().padStart(2, '0');
+
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterday = new Date(today - 86400000);
+    const msgDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+    const timeStr = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+
+    if (msgDay.getTime() === today.getTime()) {
+        return timeStr;
+    }
+    if (msgDay.getTime() === yesterday.getTime()) {
+        return `昨天 ${timeStr}`;
+    }
+    if (d.getFullYear() === now.getFullYear()) {
+        return `${d.getMonth() + 1}月${d.getDate()}日 ${timeStr}`;
+    }
+    return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${timeStr}`;
+}
+
+function formatDateSeparator(isoStr) {
+    if (!isoStr) return '';
+    const d = new Date(isoStr);
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterday = new Date(today - 86400000);
+    const msgDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+    if (msgDay.getTime() === today.getTime()) return '今天';
+    if (msgDay.getTime() === yesterday.getTime()) return '昨天';
+    if (d.getFullYear() === now.getFullYear()) {
+        return `${d.getMonth() + 1}月${d.getDate()}日`;
+    }
+    return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
+}
+
 // Expose globally
 window.openConversation = openConversation;
 window.startContention = startContention;
 window.stopContention = stopContention;
 window.deleteConversation = deleteConversation;
+window.handleInitiateClick = handleInitiateClick;
 window.retryLoadNpcs = () => location.reload();

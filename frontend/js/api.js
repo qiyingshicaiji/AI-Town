@@ -168,3 +168,23 @@ async function fetchNpcNpcChatHistory(limit = 50) {
 async function triggerNpcNpcChat(npcA, npcB) {
     return apiRequest('POST', `/npc-npc-chat/trigger?npc_a=${encodeURIComponent(npcA)}&npc_b=${encodeURIComponent(npcB)}`);
 }
+
+/* ==================== Simulation Control APIs ==================== */
+
+async function getSimulationStatus() {
+    return apiRequest('GET', '/simulation/status', null, { useCache: false });
+}
+
+async function pauseSimulation() {
+    invalidateCache('/simulation');
+    return apiRequest('POST', '/simulation/pause');
+}
+
+async function resumeSimulation() {
+    invalidateCache('/simulation');
+    return apiRequest('POST', '/simulation/resume');
+}
+
+async function initiateNpcChat(npcName) {
+    return apiRequest('POST', `/npc/${encodeURIComponent(npcName)}/initiate`);
+}

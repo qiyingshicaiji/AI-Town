@@ -103,10 +103,11 @@ class AutonomousThinker:
         tl = self.timeline_manager.get_active_timeline()
         if tl and tl.get("current_day", 0) > 0:
             if last is None or last.date() < datetime.now().date():
-                probability = 0.7  # 每天第一次高概率打招呼
+                probability = 0.9  # 每天第一次高概率打招呼
 
+        probability = 1.0
         # 随机判断（事件可触发强制唤醒）
-        if random.random() >= probability:
+        if random.random() >= probability: 
             # 有事件时重置所有沉默计数器
             if event:
                 for name in list(self._silence_counters.keys()):
@@ -220,3 +221,33 @@ class AutonomousThinker:
                 await self.think(name)
             except Exception as e:
                 print(f"❌ {name} 自主思考失败: {e}")
+
+    async def force_initiate(self, npc_name: str) -> dict:
+        """强制指定 NPC 主动搭话 — 绕过所有检查
+
+        Returns:
+            {"npc_name": str, "content": str, "timestamp": str}
+        Raises:
+            Exception: NPC 不存在或无法生成消息
+        """
+        if npc_name not in self.npc_manager.agents:
+            raise Exception(f"NPC '{npc_name}' 不存在")
+
+        content = await self._generate_initiation(npc_name)
+        if not content:
+            raise Exception(f"{npc_name} 暂时无法生成主动消息")
+
+        msg = {
+            "content": content,
+            "timestamp": datetime.now().isoformat(),
+            "npc_name": npc_name
+        }
+        if npc_name not in self.pending_messages:
+            self.pending_messages[npc_name] = []
+        self.pending_messages[npc_name].append(msg)
+
+        self.greet_cooldown[npc_name] = datetime.now()
+        self.last_interactions[npc_name] = datetime.now()
+
+        print(f"🔔 强制 {npc_name} 主动搭话: {content[:40]}...")
+        return msg

@@ -329,7 +329,7 @@ NPC: "当然可以!我很乐意分享。"
         if outer not in self.npc_npc_affinity:
             self.npc_npc_affinity[outer] = {}
         if inner not in self.npc_npc_affinity[outer]:
-            self.npc_npc_affinity[outer][inner] = 55.0  # 初始好感度 55（需 >= 触发阈值 50）
+            self.npc_npc_affinity[outer][inner] = 60.0  # 初始好感度 55（需 >= 触发阈值 50）
 
         return self.npc_npc_affinity[outer][inner]
 
