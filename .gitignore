@@ -6,6 +6,7 @@
 .env.local
 .env
 backend/.env.local
+.claude
 
 # Python
 __pycache__/

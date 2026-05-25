@@ -250,6 +250,24 @@ async def ack_pending_messages(req: AckPendingRequest = None):
     thinker.ack_pending(npc_name, message_keys)
     return {"ack": True}
 
+@app.post("/npc/{npc_name}/initiate")
+async def force_npc_initiate(npc_name: str):
+    """强制指定 NPC 主动向玩家搭话"""
+    npc_mgr, state_mgr, _ = get_managers()
+    if npc_name not in npc_mgr.agents:
+        raise HTTPException(status_code=404, detail=f"NPC '{npc_name}' 不存在")
+
+    thinker = getattr(state_mgr, 'autonomous_thinker', None)
+    if not thinker:
+        raise HTTPException(status_code=503, detail="自主思考引擎未初始化")
+
+    try:
+        msg = await thinker.force_initiate(npc_name)
+        return msg
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/npcs/{npc_name}")
 async def get_npc_info(npc_name: str):
     """获取指定NPC的详细信息"""
@@ -592,6 +610,40 @@ async def set_active_timeline(timeline_id: str):
     return {"message": f"已切换到时间线 '{timeline_id}'", "active_id": timeline_id}
 
 
+# ==================== 仿真控制路由 ====================
+
+@app.get("/simulation/status")
+async def get_simulation_status():
+    """获取仿真运行状态"""
+    _, state_mgr, _ = get_managers()
+    chat_engine = getattr(state_mgr, 'npc_chat_engine', None)
+    daily_remaining = chat_engine.MAX_DAILY_CALLS - chat_engine.daily_call_count if chat_engine else 0
+    active_count = len([c for c in chat_engine.active_chats.values() if not c.get("ended_at")]) if chat_engine else 0
+    return {
+        "paused": state_mgr.is_paused() if state_mgr else False,
+        "active_npc_chats": active_count,
+        "daily_calls_remaining": max(0, daily_remaining)
+    }
+
+@app.post("/simulation/pause")
+async def pause_simulation():
+    """暂停后台自动循环"""
+    _, state_mgr, _ = get_managers()
+    if not state_mgr:
+        raise HTTPException(status_code=503, detail="状态管理器未初始化")
+    state_mgr.pause()
+    return {"status": "paused", "message": "模拟已暂停"}
+
+@app.post("/simulation/resume")
+async def resume_simulation():
+    """恢复后台自动循环"""
+    _, state_mgr, _ = get_managers()
+    if not state_mgr:
+        raise HTTPException(status_code=503, detail="状态管理器未初始化")
+    state_mgr.resume()
+    return {"status": "running", "message": "模拟已恢复"}
+
+
 # ==================== 群聊路由 ====================
 
 import asyncio as _asyncio, random as _random
@@ -825,7 +877,7 @@ async def get_npc_npc_chat_history(limit: int = Query(default=50, le=100)):
 
 @app.post("/npc-npc-chat/trigger")
 async def trigger_npc_npc_chat(npc_a: str = Query(...), npc_b: str = Query(...)):
-    """手动触发 NPC 间对话（测试用）"""
+    """手动触发 NPC 间对话"""
     _, state_mgr, _ = get_managers()
     chat_engine = getattr(state_mgr, 'npc_chat_engine', None)
     if not chat_engine:
@@ -835,11 +887,19 @@ async def trigger_npc_npc_chat(npc_a: str = Query(...), npc_b: str = Query(...))
     if npc_a not in npc_mgr.agents or npc_b not in npc_mgr.agents:
         raise HTTPException(status_code=404, detail="NPC不存在")
 
-    success = await chat_engine.trigger_chat(npc_a, npc_b, reason="manual")
-    if not success:
-        raise HTTPException(status_code=409, detail="无法触发对话（状态/冷却/好感度不满足）")
+    if npc_a == npc_b:
+        raise HTTPException(status_code=400, detail="请选择两个不同的NPC")
 
-    return {"message": f"已触发 {npc_a} 与 {npc_b} 的对话"}
+    # 检查是否有正在进行的对话
+    active_count = sum(1 for c in chat_engine.active_chats.values() if not c.get("ended_at"))
+    if active_count > 0:
+        raise HTTPException(status_code=409, detail="已有对话正在进行，请等待结束后再试")
+
+    chat_id = await chat_engine.trigger_chat(npc_a, npc_b, reason="manual")
+    if not chat_id:
+        raise HTTPException(status_code=500, detail="对话生成失败")
+
+    return {"message": f"已触发 {npc_a} 与 {npc_b} 的对话", "chat_id": chat_id}
 
 
 # ==================== 主程序入口 ====================

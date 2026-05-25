@@ -73,11 +73,11 @@ class NPCNPCChatEngine:
     - 每日最多 50 次 LLM 调用
     """
 
-    MAX_ROUNDS = 3
+    MAX_ROUNDS = 5
     MAX_DURATION = settings.NPC_STATE_TIMEOUT_BUSY  # 60s
     COOLDOWN = 300         # 同一对冷却 5 分钟
     GLOBAL_COOLDOWN = 60   # 全局冷却：任意对话结束后 60s 才允许下一场
-    TRIGGER_PROBABILITY = 0.15  # 每次检查 15% 概率
+    TRIGGER_PROBABILITY = 0.4  # 每次检查 15% 概率
     AFFINITY_THRESHOLD = 50
     MAX_DAILY_CALLS = settings.NPC_NPC_CHAT_MAX_DAILY
     DEDUP_LOOKBACK = 8     # 去重时回溯最近 5 场对话
@@ -253,9 +253,7 @@ class NPCNPCChatEngine:
                 return False
             if self._is_cooling_down(npc_a, npc_b):
                 return False
-        else:
-            # 手动触发可以覆盖一些限制
-            pass
+        # 手动触发跳过 idle/冷却/好感度检查
 
         # 检查是否有活跃（未结束的）对话
         active_count = sum(1 for c in self.active_chats.values() if not c.get("ended_at"))
@@ -326,6 +324,8 @@ class NPCNPCChatEngine:
         # 构建「最近已聊过」上下文 — 供 LLM 避开重复话题
         recent_context = self._build_recent_chat_context(npc_a, npc_b)
 
+        messages = []
+
         # 优先使用场景生成器
         if self.scene_generator:
             try:
@@ -334,43 +334,49 @@ class NPCNPCChatEngine:
                     trigger_message="",
                     max_messages=6,
                     is_npc_npc=True,
-                    extra_context=recent_context,  # 告诉 LLM 最近聊了什么
+                    extra_context=recent_context,
                 )
                 if scene:
                     content_str = "|".join(m.get("content", "") for m in scene)
-                    # 先做去重检查
                     if self._would_be_duplicate(npc_a, npc_b, content_str):
                         print(f"  🚫 内容去重拦截 [{npc_a}↔{npc_b}]: 与最近对话高度相似")
-                        return self._generate_fallback(npc_a, npc_b, "", recent_context)
-                    # ✅ 記憶寫入由 scene_generator._save_scene_to_memory 統一處理
-                    return scene
+                        messages = self._generate_fallback(npc_a, npc_b, "", recent_context)
+                    else:
+                        messages = scene
             except Exception as e:
                 print(f"⚠️ 场景生成器NPC对话失败: {e}")
 
-        # 获取事件背景
-        event_context = ""
-        try:
-            event_text = self.timeline_manager.get_event_context()
-            if event_text:
-                event_context = f"【今日事件】{event_text}\n"
-        except Exception:
-            pass
-
-        # 获取 NPC 信息
-        info_a = self.npc_manager.get_npc_info(npc_a)
-        info_b = self.npc_manager.get_npc_info(npc_b)
-        aff = self.npc_manager.relationship_manager.get_npc_npc_affinity(npc_a, npc_b)
-        aff_level = self.npc_manager.relationship_manager.get_affinity_level(aff)
-
-        # 优先使用 LLM
-        if self.llm:
+        # 回退到独立 LLM
+        if not messages:
+            event_context = ""
             try:
-                return await self._generate_with_llm(npc_a, npc_b, info_a, info_b, aff_level, event_context, recent_context)
-            except Exception as e:
-                print(f"⚠️  LLM生成NPC对话失败: {e}，使用fallback")
+                event_text = self.timeline_manager.get_event_context()
+                if event_text:
+                    event_context = f"【今日事件】{event_text}\n"
+            except Exception:
+                pass
 
-        # Fallback
-        return self._generate_fallback(npc_a, npc_b, event_context, recent_context)
+            info_a = self.npc_manager.get_npc_info(npc_a)
+            info_b = self.npc_manager.get_npc_info(npc_b)
+            aff = self.npc_manager.relationship_manager.get_npc_npc_affinity(npc_a, npc_b)
+            aff_level = self.npc_manager.relationship_manager.get_affinity_level(aff)
+
+            if self.llm:
+                try:
+                    messages = await self._generate_with_llm(npc_a, npc_b, info_a, info_b, aff_level, event_context, recent_context)
+                except Exception as e:
+                    print(f"⚠️  LLM生成NPC对话失败: {e}，使用fallback")
+
+            if not messages:
+                messages = self._generate_fallback(npc_a, npc_b, event_context, recent_context)
+
+        # 确保所有消息都有时间戳
+        now = datetime.now().isoformat()
+        for msg in messages:
+            if "timestamp" not in msg:
+                msg["timestamp"] = now
+
+        return messages
 
     def _build_recent_chat_context(self, npc_a: str, npc_b: str) -> str:
         """構建「最近已聊過」上下文 — 從記憶系統中檢索（而非手動維護 history）"""

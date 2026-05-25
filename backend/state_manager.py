@@ -62,6 +62,9 @@ class NPCStateManager:
         # 注入到 NPCAgentManager 供 chat() 使用
         npc_mgr.perception_engine = self.perception_engine
 
+        # 暂停控制
+        self._paused = False
+
         # 后台任务
         self._npc_chat_task: Optional[asyncio.Task] = None
         self._think_task: Optional[asyncio.Task] = None
@@ -69,6 +72,20 @@ class NPCStateManager:
         self._running = False
 
         print("📊 NPC状态管理器初始化完成")
+
+    def pause(self):
+        """暂停所有后台自动循环（NPC对话、自主思考、感知扫描）"""
+        self._paused = True
+        print("⏸️ 模拟已暂停")
+
+    def resume(self):
+        """恢复所有后台自动循环"""
+        self._paused = False
+        print("▶️ 模拟已恢复")
+
+    def is_paused(self) -> bool:
+        """查询暂停状态"""
+        return self._paused
     
     async def start(self):
         """启动后台更新任务"""
@@ -111,6 +128,8 @@ class NPCStateManager:
         while self._running:
             try:
                 await asyncio.sleep(check_interval)
+                if self._paused:
+                    continue
                 chat_id = await self.npc_chat_engine.check_and_trigger()
                 if chat_id:
                     print(f"💬 NPC间对话已触发: {chat_id}")
@@ -133,6 +152,8 @@ class NPCStateManager:
         while self._running:
             try:
                 await asyncio.sleep(think_interval)
+                if self._paused:
+                    continue
                 await self.autonomous_thinker.think_all()
             except asyncio.CancelledError:
                 break
@@ -145,6 +166,8 @@ class NPCStateManager:
         while self._running:
             try:
                 await asyncio.sleep(perception_interval)
+                if self._paused:
+                    continue
                 self.perception_engine.scan_and_observe()
             except asyncio.CancelledError:
                 break

@@ -20,14 +20,11 @@
             <div class="day-display">📅 第 <span id="currentDay">0</span> 天</div>
             <button id="advanceDayBtn" class="btn btn-sm">⏩ +1天</button>
             <button id="godPanelToggle" class="btn btn-sm btn-god">⚡ 上帝界面</button>
+            <button id="pauseBtn" class="btn btn-sm btn-pause">⏸ 暂停</button>
         </div>
         <div class="top-bar-right">
             <span id="connectionStatus" class="status-dot offline"></span>
             <span id="connectionText">连接中...</span>
-            <span class="poll-indicator" id="pollIndicator" title="轮询状态">
-                <span class="poll-dot" id="pollDot"></span>
-                <span id="pollLabel">等待数据</span>
-            </span>
         </div>
     </header>
 
@@ -41,6 +38,7 @@
                 </div>
                 <div class="sidebar-actions">
                     <button id="newGroupChatBtn" class="btn btn-sm">👥 新建群聊</button>
+                    <button id="newNpcChatBtn" class="btn btn-sm">💬 NPC对话</button>
                 </div>
             </div>
             <div class="conv-list" id="convList">
@@ -127,8 +125,23 @@
         </div>
     </div>
 
-    <!-- Toast 通知容器 -->
-    <div class="toast-container" id="toastContainer"></div>
+    <!-- NPC对话选择弹窗 -->
+    <div class="modal-overlay" id="newNpcChatModal" style="display:none;">
+        <div class="modal">
+            <h3>💬 NPC 对话</h3>
+            <p>选择两个 NPC 开始自然对话：</p>
+            <div class="npc-chat-selects">
+                <select id="npcChatSelectA"><option value="">-- 选择NPC A --</option></select>
+                <span class="npc-chat-vs">↔</span>
+                <select id="npcChatSelectB"><option value="">-- 选择NPC B --</option></select>
+            </div>
+            <p class="modal-hint" id="npcChatHint"></p>
+            <div class="modal-buttons">
+                <button id="newNpcChatCancel" class="btn">取消</button>
+                <button id="newNpcChatConfirm" class="btn btn-primary">开始对话</button>
+            </div>
+        </div>
+    </div>
 
     <!-- 推进确认对话框 -->
     <div class="modal-overlay" id="advanceModal" style="display:none;">
@@ -143,10 +156,10 @@
         </div>
     </div>
 
-    <script src="js/state.js?v=3"></script>
-    <script src="js/api.js?v=3"></script>
-    <script src="js/storage.js?v=3"></script>
-    <script src="js/app.js?v=3"></script>
-    <script src="js/god.js?v=3"></script>
+    <script src="js/state.js?v=2"></script>
+    <script src="js/api.js?v=2"></script>
+    <script src="js/storage.js?v=2"></script>
+    <script src="js/app.js?v=2"></script>
+    <script src="js/god.js?v=2"></script>
 </body>
 </html>

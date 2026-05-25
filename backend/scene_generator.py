@@ -3,6 +3,7 @@
 import json
 import re
 import random
+from datetime import datetime
 from typing import List, Dict, Optional
 
 
@@ -97,6 +98,12 @@ class SceneGenerator:
             )
             response = agent.run(prompt, temperature=0.9)
             scene = self._parse_json_response(response, npc_names)
+
+            # 为每条消息添加时间戳
+            now = datetime.now().isoformat()
+            for msg in scene:
+                if "timestamp" not in msg:
+                    msg["timestamp"] = now
 
             # 保存到记忆
             conv_type = "群聊" if is_group else ("NPC间对话" if is_npc_npc else "1v1聊天")
@@ -394,18 +401,19 @@ class SceneGenerator:
 
     def _fallback_scene(self, npc_names, is_group, is_npc_npc, trigger):
         """无 LLM 时的备用场景"""
+        now = datetime.now().isoformat()
         if is_npc_npc and len(npc_names) >= 2:
             return [
-                {"speaker": npc_names[0], "content": f"最近工作怎么样？"},
-                {"speaker": npc_names[1], "content": "还行吧，每天都有新挑战。你呢？"},
-                {"speaker": npc_names[0], "content": "我也差不多，今天事情特别多。"},
+                {"speaker": npc_names[0], "content": "最近工作怎么样？", "timestamp": now},
+                {"speaker": npc_names[1], "content": "还行吧，每天都有新挑战。你呢？", "timestamp": now},
+                {"speaker": npc_names[0], "content": "我也差不多，今天事情特别多。", "timestamp": now},
             ]
 
         if trigger:
             name = npc_names[0] if npc_names else "张三"
             return [
-                {"speaker": name, "content": f"好的,我理解了。关于'{trigger[:15]}...'这个问题,我觉得可以从几个方面来看。"},
+                {"speaker": name, "content": f"好的,我理解了。关于'{trigger[:15]}...'这个问题,我觉得可以从几个方面来看。", "timestamp": now},
             ]
 
         name = npc_names[0] if npc_names else "张三"
-        return [{"speaker": name, "content": "嗯，这个话题挺有意思的。"}]
+        return [{"speaker": name, "content": "嗯，这个话题挺有意思的。", "timestamp": now}]

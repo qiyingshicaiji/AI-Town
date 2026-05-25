@@ -103,6 +103,12 @@ body {
 .btn-primary:hover { background: var(--brand-dark); }
 .btn-send { background: var(--brand); color: #fff; padding: 8px 22px; font-size: var(--text-base); border-radius: var(--radius-sm); }
 .btn-send:hover { background: var(--brand-dark); }
+.btn-pause { background: var(--warn); color: #fff; }
+.btn-pause:hover { background: #d97706; }
+.btn-pause.paused { background: var(--brand); }
+.btn-pause.paused:hover { background: var(--brand-dark); }
+.btn-initiate { background: none; border: none; color: var(--gray-500); cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: var(--radius-sm); transition: all .15s; }
+.btn-initiate:hover { color: var(--warn); background: var(--warn-light); }
 .btn-god { background: #7c3aed; color: #fff; }
 .btn-god:hover { background: #6d28d9; }
 
@@ -228,6 +234,10 @@ body {
     box-shadow: var(--shadow-sm);
 }
 .message-time { font-size: 11px; color: var(--gray-400); text-align: center; margin: 6px 0; }
+.message-date-separator { font-size: 11px; color: var(--gray-400); text-align: center; margin: 16px 0 8px; }
+.message-time-inline { font-size: 10px; color: var(--gray-400); display: block; margin-top: 3px; }
+.message-row.self .message-time-inline { text-align: right; }
+.message-bubble-wrapper { display: flex; flex-direction: column; }
 .message-willingness { font-size: 10px; color: var(--warn); margin-top: 1px; }
 
 /* Chat Input */
@@ -309,6 +319,10 @@ body {
 .modal p { font-size: var(--text-sm); margin-bottom: 8px; color: var(--gray-600); line-height: var(--leading); }
 .modal-warning { color: var(--danger) !important; font-weight: 600; }
 .modal-buttons { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+.modal-hint { font-size: var(--text-xs); color: var(--danger); min-height: 18px; }
+.npc-chat-selects { display: flex; align-items: center; gap: 10px; margin: 12px 0; }
+.npc-chat-selects select { flex: 1; padding: 8px 10px; border: 1px solid var(--gray-300); border-radius: var(--radius-sm); font-size: var(--text-sm); background: #fff; }
+.npc-chat-vs { font-size: var(--text-lg); color: var(--gray-400); flex-shrink: 0; }
 .checkbox-group { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
 .checkbox-label { display: flex; align-items: center; gap: 8px; font-size: var(--text-sm); cursor: pointer; padding: 6px 8px; border-radius: 4px; }
 .checkbox-label:hover { background: var(--gray-50); }
