@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 import time
 import json
+import os
 from datetime import datetime
 
 from config import settings
@@ -66,14 +67,6 @@ async def lifespan(app: FastAPI):
     # 验证配置
     settings.validate()
 
-    # 嵌入：强制使用 TF-IDF，无需 API Key，Agent 创建前完成拟合
-    import os as _os
-    _os.environ["EMBED_MODEL_TYPE"] = "tfidf"
-    _os.environ["EMBED_MODEL_NAME"] = ""  # 必须清空，否则框架会给 TFIDFEmbedding 传入错误的 model_name
-    from hello_agents.memory.embedding import get_text_embedder
-    _embedder = get_text_embedder()
-    _embedder.fit(["办公室 同事 技术 开发 产品 设计 咖啡 Python 工程师 产品经理 UI设计师"])
-
     # 初始化NPC管理器
     npc_manager = get_npc_manager()
 
@@ -88,7 +81,7 @@ async def lifespan(app: FastAPI):
     # 初始化知识库 RAG（失败不影响后端启动）
     knowledge_manager = None
     try:
-        knowledge_dir = _os.path.join(_os.path.dirname(__file__), 'knowledge')
+        knowledge_dir = os.path.join(os.path.dirname(__file__), 'knowledge')
         knowledge_manager = KnowledgeManager(knowledge_dir)
         if getattr(state_manager, 'scene_generator', None):
             state_manager.scene_generator.knowledge_manager = knowledge_manager
