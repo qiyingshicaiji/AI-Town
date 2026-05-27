@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 import time
 import json
+import os
 from datetime import datetime
 
 from config import settings
@@ -26,12 +27,16 @@ from models import (
     # NPC 间聊天
     NPCNPCChatRecord, NPCNPCChatStatusResponse,
     # 主动消息
-    PendingMessagesResponse, AckPendingRequest
+    PendingMessagesResponse, AckPendingRequest,
+    # NPC 配置管理
+    NpcConfigCreate, NpcConfigUpdate, NpcConfigSummary, NpcConfigListResponse,
+    NpcGenerateRequest,
 )
 from agents import get_npc_manager
 from state_manager import get_state_manager
 from timeline_manager import get_timeline_manager
 from scene_generator import SceneGenerator
+from knowledge_manager import KnowledgeManager
 
 # 全局场景生成器
 _scene_generator = None
@@ -46,6 +51,8 @@ def get_scene_generator():
             timeline_manager=tm_mgr,
             llm=npc_mgr.llm if npc_mgr.llm else None
         )
+        if hasattr(npc_mgr, 'knowledge_manager') and npc_mgr.knowledge_manager:
+            _scene_generator.knowledge_manager = npc_mgr.knowledge_manager
     return _scene_generator
 
 # 生命周期管理
@@ -59,7 +66,7 @@ async def lifespan(app: FastAPI):
     
     # 验证配置
     settings.validate()
-    
+
     # 初始化NPC管理器
     npc_manager = get_npc_manager()
 
@@ -70,7 +77,20 @@ async def lifespan(app: FastAPI):
     # 初始化并启动状态管理器
     state_manager = get_state_manager(settings.NPC_UPDATE_INTERVAL)
     await state_manager.start()
-    
+
+    # 初始化知识库 RAG（失败不影响后端启动）
+    knowledge_manager = None
+    try:
+        knowledge_dir = os.path.join(os.path.dirname(__file__), 'knowledge')
+        knowledge_manager = KnowledgeManager(knowledge_dir)
+        if getattr(state_manager, 'scene_generator', None):
+            state_manager.scene_generator.knowledge_manager = knowledge_manager
+        npc_manager.knowledge_manager = knowledge_manager
+    except Exception as e:
+        import traceback
+        print(f"⚠️ 知识库RAG初始化失败: {e}")
+        traceback.print_exc()
+
     print("\n✅ 所有服务已启动!")
     print(f"📡 API地址: http://{settings.API_HOST}:{settings.API_PORT}")
     print(f"📚 API文档: http://{settings.API_HOST}:{settings.API_PORT}/docs")
@@ -642,6 +662,146 @@ async def resume_simulation():
         raise HTTPException(status_code=503, detail="状态管理器未初始化")
     state_mgr.resume()
     return {"status": "running", "message": "模拟已恢复"}
+
+
+# ==================== 知识库管理路由 ====================
+
+@app.post("/knowledge/reload")
+async def reload_knowledge():
+    """热加载知识库：清空 Qdrant 并重新导入 knowledge/ 目录下所有文件"""
+    npc_mgr, _, _ = get_managers()
+    km = getattr(npc_mgr, 'knowledge_manager', None)
+    if not km:
+        raise HTTPException(status_code=503, detail="知识库未初始化")
+    from agents import NPC_ROLES
+    km.reload(npc_roles=NPC_ROLES)
+    return {"message": "知识库已重载"}
+
+
+# ==================== NPC 配置管理路由 ====================
+
+@app.get("/npc-configs", response_model=NpcConfigListResponse)
+async def list_npc_configs():
+    """获取所有NPC配置列表（摘要）"""
+    from agents import NPC_ROLES, BUILT_IN_NPC_NAMES
+    npcs = [
+        NpcConfigSummary(
+            name=name,
+            title=role.get("title", ""),
+            personality=role.get("personality", ""),
+            is_builtin=name in BUILT_IN_NPC_NAMES,
+        )
+        for name, role in NPC_ROLES.items()
+    ]
+    return NpcConfigListResponse(npcs=npcs, total=len(npcs))
+
+
+@app.get("/npc-configs/{npc_name}")
+async def get_npc_config(npc_name: str):
+    """获取单个NPC完整配置"""
+    from agents import NPC_ROLES
+    if npc_name not in NPC_ROLES:
+        raise HTTPException(status_code=404, detail=f"NPC '{npc_name}' 不存在")
+    return {"name": npc_name, **NPC_ROLES[npc_name]}
+
+
+@app.post("/npc-configs", response_model=dict)
+async def create_npc_config(req: NpcConfigCreate):
+    """创建新NPC"""
+    npc_mgr, _, _ = get_managers()
+    try:
+        config = req.model_dump(exclude={"name"})
+        result = npc_mgr.add_npc(req.name, config)
+        return {"message": f"NPC '{req.name}' 创建成功", "npc": {"name": req.name, **result}}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.put("/npc-configs/{npc_name}")
+async def update_npc_config(npc_name: str, req: NpcConfigUpdate):
+    """更新NPC配置（部分合并）"""
+    npc_mgr, _, _ = get_managers()
+    try:
+        config = {k: v for k, v in req.model_dump().items() if v is not None}
+        result = npc_mgr.update_npc(npc_name, config)
+        return {"message": f"NPC '{npc_name}' 更新成功", "npc": {"name": npc_name, **result}}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.delete("/npc-configs/{npc_name}")
+async def delete_npc_config(npc_name: str):
+    """删除NPC（内置NPC不可删除）"""
+    npc_mgr, _, _ = get_managers()
+    try:
+        npc_mgr.delete_npc(npc_name)
+        return {"message": f"NPC '{npc_name}' 已删除"}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+
+@app.post("/npc-configs/generate")
+async def generate_npc_config(req: NpcGenerateRequest):
+    """AI 一句话生成NPC完整配置"""
+    from agents import NPC_ROLES
+    npc_mgr, _, _ = get_managers()
+
+    if not npc_mgr.llm:
+        raise HTTPException(status_code=503, detail="LLM未初始化")
+
+    prompt = f"""你是一个角色设计师。根据用户的一句话描述，生成一个完整的虚拟角色。
+
+用户描述: {req.description}
+
+请输出严格的JSON格式，包含以下字段:
+- name: 角色中文名（2-3字，不要和已有NPC重名）
+- title: 职位名称
+- location: 在办公室常待的位置（如"工位区"、"会议室"、"休息区"）
+- activity: 典型活动（如"写代码"、"喝咖啡"、"整理需求"）
+- core_personality: 核心性格描述（150-300字，生动有细节，像小说人物简介）
+- personality: 性格简短总结（20-40字）
+- work_context: 工作背景描述
+- speaking_style: 说话风格描述（包含语速、口头禅、表达特点）
+- style: 说话风格简短总结（10-20字）
+- quirks: 3-4个小习惯（数组）
+- emotional_triggers: {{"positive": ["开心的事1","开心的事2","开心的事3"], "negative": ["不爽的事1","不爽的事2","不爽的事3"]}}
+- pet_peeves: 雷区/最讨厌的事
+- expertise: 专长技能（用顿号分隔）
+- hobbies: 爱好（用顿号分隔）
+
+已有NPC: {', '.join(NPC_ROLES.keys())}
+名字不要和已有NPC重复。
+
+只输出JSON，不要任何解释或markdown标记。"""
+
+    try:
+        from hello_agents import SimpleAgent
+        agent = SimpleAgent(
+            name="NPCDesigner",
+            llm=npc_mgr.llm,
+            system_prompt="你是角色设计师，严格只输出JSON格式。"
+        )
+        response = agent.run(prompt, temperature=1.0)
+        response = response.strip()
+        if response.startswith("```"):
+            lines = response.split("\n")
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            response = "\n".join(lines)
+        if response.startswith("json"):
+            response = response[4:].strip()
+
+        import json
+        config = json.loads(response)
+        return {"name": config.get("name", ""), "config": config}
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=500, detail=f"AI生成JSON解析失败: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI生成失败: {str(e)}")
 
 
 # ==================== 群聊路由 ====================

@@ -6,7 +6,15 @@
 .env.local
 .env
 backend/.env.local
-.claude
+backend/.env
+
+# Node.js
+node_modules/
+frontend/node_modules/
+bff/node_modules/
+
+# Old/backup code
+frontend-old/
 
 # Python
 __pycache__/
@@ -36,8 +44,11 @@ backend/logs/*.log
 .idea/
 *.swp
 *.swo
-.claude
+.codebuddy/
 *~
+
+# Claude Code
+.claude/
 
 # OS
 .DS_Store

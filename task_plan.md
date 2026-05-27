@@ -1,44 +1,35 @@
-# Task Plan: NPC 发言防重复增强 (v3)
+# Task Plan: NPC 人物档案注入 + 知识库 RAGTool 替换
 
-**目标**: 修复同一运行内 NPC 发言重复问题（主动消息循环 / 群聊抢话循环 / NPC-NPC 跨批次重复）
+**目标**: 解决 NPC 瞎编问题 + 用 hello_agents 内置 RAGTool 替代自定义 LoreManager
 
-## Phase 1: L1 + L4 + L5 — agents.py 核心增强
+## Phase A: 同事名册嵌入角色档案 (done)
+- _build_roles_text() 嵌入 "你认识的其他同事"
+- generate_npc_speech() 嵌入同事信息
+- _load_npc_configs() 防止数据丢失
+Status: complete
 
-### L1: 强化 _is_speech_duplicate()
-- 加语义向量余弦相似度检测（通过 episodic memory 的 embedder）
-- 加关键词指纹检测（实词集合重叠率）
-- 三取一命中即拦截（Jaccard / 语义 / 关键词）
+## Phase B: RAGTool 替换 LoreManager (done)
 
-### L4: 修复记忆检索 query
-- context_type 驱动检索模板（"主动发起"→话题词，"群聊抢话"→最近上下文）
-- 替换无意义的 `context[:60]`
+### Phase B1: 新建 knowledge_manager.py (done)
+- RAGTool 薄适配层，~130 行
+- query() / sync_npc_info() / reload()
 
-### L5: retry 话题种子
-- 从事件/性格/话题池随机抽取种子词注入 retry prompt
-- retry 仍重复则返回 None
+### Phase B2: 修改 scene_generator.py (done)
+- lore_manager → knowledge_manager
+- 删除 expertise_hints 领域过滤
 
-Status: pending
+### Phase B3: 修改 main.py (done)
+- 导入 KnowledgeManager 替代 LoreManager
+- 更新 lifespan 初始化逻辑
 
-## Phase 2: L2 — autonomous_thinker.py 沉默机制
+### Phase B4: 修改 agents.py (done)
+- 新增 _sync_knowledge() 辅助方法
+- add_npc / update_npc / delete_npc 调用同步
 
-- `__init__` 加 `_silence_counters` 和 `_had_player_interaction`
-- `think()` 沉默检查：连续 2 次被拦截 → 跳过
-- `record_interaction()` 重置计数器
+### Phase B5: 清理 (done)
+- 删除 lore_manager.py (~230 行 → 删除)
+- 新增 knowledge_manager.py (~130 行)
+- Net: -100 行代码，+MarkItDown 多格式支持
 
-Status: pending
-
-## Phase 3: L3 — scene_generator.py 话题避开
-
-- `_build_rules()` 加话题避开规则
-- `_build_history_text()` 记忆标签提示
-
-Status: pending
-
-## Phase 4: 验证
-
-- 启动后端观察主动消息日志
-- 触发群聊抢话 3 轮
-- 等待 NPC-NPC 对话 2 场
-- 确认去重拦截日志中出现新维度标记
-
+## 验证
 Status: pending
