@@ -9,6 +9,8 @@ services:
       - ./backend/timeline_data:/app/timeline_data
       - ./backend/memory_data:/app/memory_data
       - ./backend/logs:/app/logs
+      - ./backend/npc_configs.json:/app/npc_configs.json
+      - ./backend/knowledge:/app/knowledge
     env_file:
       - ./backend/.env
     environment:

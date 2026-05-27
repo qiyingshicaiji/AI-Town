@@ -101,13 +101,14 @@ function makeNpcNpcConvId(npcA, npcB) {
     return 'npcnpc_' + pair;
 }
 
-// Initialize default 1v1 conversations if none exist
+// Ensure every known NPC has a 1v1 conversation entry
 function initDefaultConversations(npcNames) {
     const list = getConversationList();
-    if (list.length === 0) {
-        for (const name of npcNames) {
+    for (const name of npcNames) {
+        const convId = make1v1ConvId(name);
+        if (!list.find(c => c.id === convId)) {
             upsertConversation({
-                id: make1v1ConvId(name),
+                id: convId,
                 type: '1v1',
                 name: name,
                 title: '',

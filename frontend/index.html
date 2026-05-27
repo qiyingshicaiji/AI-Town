@@ -21,6 +21,7 @@
             <button id="advanceDayBtn" class="btn btn-sm">⏩ +1天</button>
             <button id="godPanelToggle" class="btn btn-sm btn-god">⚡ 上帝界面</button>
             <button id="pauseBtn" class="btn btn-sm btn-pause">⏸ 暂停</button>
+            <button id="npcManagerToggle" class="btn btn-sm">⚙ NPC管理</button>
         </div>
         <div class="top-bar-right">
             <span id="connectionStatus" class="status-dot offline"></span>
@@ -110,6 +111,21 @@
             </div>
         </aside>
         <div class="god-backdrop" id="godBackdrop"></div>
+
+        <!-- NPC 管理面板 -->
+        <aside class="npc-manager-panel collapsed" id="npcManagerPanel">
+            <div class="npc-manager-header">
+                <h2>⚙ NPC角色管理</h2>
+                <button id="npcManagerClose" class="btn btn-sm">✕</button>
+            </div>
+            <div class="npc-manager-body">
+                <div class="npc-manager-toolbar">
+                    <button id="createNpcBtn" class="btn btn-primary">+ 创建新NPC</button>
+                </div>
+                <div class="npc-list" id="npcList"><p class="god-hint">加载中...</p></div>
+            </div>
+        </aside>
+        <div class="npc-manager-backdrop" id="npcManagerBackdrop"></div>
     </div>
 
     <!-- 创建群聊对话框 -->
@@ -139,6 +155,43 @@
             <div class="modal-buttons">
                 <button id="newNpcChatCancel" class="btn">取消</button>
                 <button id="newNpcChatConfirm" class="btn btn-primary">开始对话</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- NPC 创建/编辑向导弹窗 -->
+    <div class="modal-overlay" id="npcWizardModal" style="display:none;">
+        <div class="modal modal-wizard">
+            <h3 id="wizardTitle">创建新NPC</h3>
+            <div class="wizard-steps">
+                <span class="wizard-step active" data-step="1">① 基本信息</span>
+                <span class="wizard-step" data-step="2">② 性格说话</span>
+                <span class="wizard-step" data-step="3">③ 习惯情绪</span>
+                <span class="wizard-step" data-step="4">④ 背景专长</span>
+            </div>
+            <div class="ai-generate-bar">
+                <input type="text" id="aiGenInput" placeholder="✨ 一句话描述你想创建的NPC...（如：喜欢摇滚的暴躁设计师）" maxlength="200">
+                <button id="aiGenBtn" class="btn btn-primary btn-sm">AI生成</button>
+            </div>
+            <div class="wizard-content" id="wizardContent"></div>
+            <div class="modal-buttons">
+                <button id="wizardCancel" class="btn">取消</button>
+                <button id="wizardPrev" class="btn" style="display:none">上一步</button>
+                <button id="wizardNext" class="btn btn-primary">下一步</button>
+                <button id="wizardSave" class="btn btn-primary" style="display:none">保存NPC</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- NPC 详情卡片弹窗 -->
+    <div class="modal-overlay" id="npcDetailModal" style="display:none;">
+        <div class="modal">
+            <h3 id="npcDetailTitle"></h3>
+            <div class="npc-detail-card" id="npcDetailCard"></div>
+            <div class="modal-buttons">
+                <button id="npcDetailEdit" class="btn btn-primary">✏️ 编辑</button>
+                <button id="npcDetailDelete" class="btn" style="color:var(--danger)">🗑 删除</button>
+                <button id="npcDetailClose" class="btn">关闭</button>
             </div>
         </div>
     </div>
