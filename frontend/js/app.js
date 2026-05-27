@@ -24,6 +24,27 @@ const npcChatSelectB = document.getElementById('npcChatSelectB');
 const npcChatHint = document.getElementById('npcChatHint');
 const newNpcChatConfirm = document.getElementById('newNpcChatConfirm');
 const newNpcChatCancel = document.getElementById('newNpcChatCancel');
+const npcManagerToggle = document.getElementById('npcManagerToggle');
+const npcManagerPanel = document.getElementById('npcManagerPanel');
+const npcManagerBackdrop = document.getElementById('npcManagerBackdrop');
+const npcManagerClose = document.getElementById('npcManagerClose');
+const createNpcBtn = document.getElementById('createNpcBtn');
+const npcList = document.getElementById('npcList');
+const npcWizardModal = document.getElementById('npcWizardModal');
+const wizardTitle = document.getElementById('wizardTitle');
+const wizardContent = document.getElementById('wizardContent');
+const wizardPrev = document.getElementById('wizardPrev');
+const wizardNext = document.getElementById('wizardNext');
+const wizardSave = document.getElementById('wizardSave');
+const wizardCancel = document.getElementById('wizardCancel');
+const aiGenInput = document.getElementById('aiGenInput');
+const aiGenBtn = document.getElementById('aiGenBtn');
+const npcDetailModal = document.getElementById('npcDetailModal');
+const npcDetailTitle = document.getElementById('npcDetailTitle');
+const npcDetailCard = document.getElementById('npcDetailCard');
+const npcDetailEdit = document.getElementById('npcDetailEdit');
+const npcDetailDelete = document.getElementById('npcDetailDelete');
+const npcDetailClose = document.getElementById('npcDetailClose');
 const connectionStatus = document.getElementById('connectionStatus');
 const connectionText = document.getElementById('connectionText');
 const idleCountEl = document.getElementById('idleCount');
@@ -121,6 +142,24 @@ function setupEventListeners() {
     newNpcChatBtn.addEventListener('click', openNewNpcChatModal);
     newNpcChatCancel.addEventListener('click', () => newNpcChatModal.style.display = 'none');
     newNpcChatConfirm.addEventListener('click', createNpcNpcChat);
+
+    // NPC Manager
+    npcManagerToggle.addEventListener('click', () => { toggleNpcManager(true); });
+    npcManagerClose.addEventListener('click', () => { toggleNpcManager(false); });
+    npcManagerBackdrop.addEventListener('click', () => { toggleNpcManager(false); });
+    createNpcBtn.addEventListener('click', () => openNpcWizard(null));
+
+    // Wizard
+    wizardNext.addEventListener('click', () => wizardNavigate(1));
+    wizardPrev.addEventListener('click', () => wizardNavigate(-1));
+    wizardSave.addEventListener('click', saveNpcFromWizard);
+    wizardCancel.addEventListener('click', () => npcWizardModal.style.display = 'none');
+    aiGenBtn.addEventListener('click', aiGenerateNpc);
+
+    // Detail modal
+    npcDetailClose.addEventListener('click', () => npcDetailModal.style.display = 'none');
+    npcDetailEdit.addEventListener('click', editNpcFromDetail);
+    npcDetailDelete.addEventListener('click', deleteNpcFromDetail);
 
     // Escape to close modals
     document.addEventListener('keydown', (e) => {
@@ -941,6 +980,280 @@ function updatePollIndicator(hadData) {
     }
 }
 
+// ==================== NPC Config Manager ====================
+
+let npcManagerOpen = false;
+let wizardStep = 1;
+let wizardMode = 'create';  // 'create' | 'edit'
+let wizardEditName = null;
+let wizardData = {};        // Accumulated form data across steps
+let detailNpcName = null;
+
+const WIZARD_FIELDS = {
+    1: ['name', 'title', 'location', 'activity'],
+    2: ['core_personality', 'personality', 'speaking_style', 'style'],
+    3: ['quirks', 'emotional_triggers_positive', 'emotional_triggers_negative', 'pet_peeves'],
+    4: ['work_context', 'expertise', 'hobbies']
+};
+
+const WIZARD_LABELS = {
+    name: 'NPC名称', title: '职位', location: '位置', activity: '典型活动',
+    core_personality: '核心性格（150-300字）', personality: '性格简述（20-40字）',
+    speaking_style: '说话风格', style: '风格简述（10-20字）',
+    quirks: '习惯（每行一个，3-4个）', emotional_triggers_positive: '开心的事（每行一个）',
+    emotional_triggers_negative: '不爽的事（每行一个）', pet_peeves: '雷区',
+    work_context: '工作背景', expertise: '专长技能（顿号分隔）', hobbies: '爱好（顿号分隔）'
+};
+
+function toggleNpcManager(open) {
+    npcManagerOpen = open;
+    if (open) {
+        npcManagerPanel.classList.remove('collapsed');
+        npcManagerBackdrop.classList.add('open');
+        loadNpcList();
+    } else {
+        npcManagerPanel.classList.add('collapsed');
+        npcManagerBackdrop.classList.remove('open');
+    }
+}
+
+async function loadNpcList() {
+    try {
+        const data = await fetchNpcConfigs();
+        renderNpcList(data.npcs || []);
+    } catch (e) {
+        npcList.innerHTML = `<p class="god-hint" style="color:var(--danger)">加载失败: ${e.message}</p>`;
+    }
+}
+
+function renderNpcList(npcs) {
+    if (!npcs.length) { npcList.innerHTML = '<p class="god-hint">暂无NPC</p>'; return; }
+    npcList.innerHTML = npcs.map(n => `
+        <div class="npc-card" onclick="openNpcDetail('${n.name}')">
+            <div class="npc-card-avatar">${n.name[0]}</div>
+            <div class="npc-card-info">
+                <div class="npc-card-name">${escapeHtml(n.name)} ${n.is_builtin ? '<span class="npc-badge-builtin">内置</span>' : ''}</div>
+                <div class="npc-card-title">${escapeHtml(n.title)}</div>
+                <div class="npc-card-personality">${escapeHtml(n.personality || '')}</div>
+            </div>
+            <div class="npc-card-actions" onclick="event.stopPropagation()">
+                <button class="btn btn-sm" onclick="openNpcWizard('${n.name}')">✏️</button>
+                ${!n.is_builtin ? `<button class="btn btn-sm" style="color:var(--danger)" onclick="deleteNpcCard('${n.name}')">🗑</button>` : ''}
+            </div>
+        </div>
+    `).join('');
+}
+
+// ==================== NPC Detail ====================
+
+async function openNpcDetail(name) {
+    try {
+        const data = await fetchNpcConfig(name);
+        detailNpcName = name;
+        npcDetailTitle.textContent = `${name} · ${data.title || ''}`;
+        const t = data.emotional_triggers || {};
+        npcDetailCard.innerHTML = `
+            <div class="detail-section"><span class="detail-label">📍</span> ${escapeHtml(data.location || '')} · ${escapeHtml(data.activity || '')}</div>
+            <div class="detail-section"><strong>核心性格</strong><p>${escapeHtml(data.core_personality || '')}</p></div>
+            <div class="detail-section"><strong>说话风格</strong><p>${escapeHtml(data.speaking_style || '')}</p></div>
+            <div class="detail-section"><strong>习惯</strong><div>${(data.quirks || []).map(q => `<span class="npc-tag">${escapeHtml(q)}</span>`).join(' ')}</div></div>
+            <div class="detail-section"><strong>开心的事</strong><div>${(t.positive || []).map(q => `<span class="npc-tag positive">${escapeHtml(q)}</span>`).join(' ')}</div></div>
+            <div class="detail-section"><strong>不爽的事</strong><div>${(t.negative || []).map(q => `<span class="npc-tag negative">${escapeHtml(q)}</span>`).join(' ')}</div></div>
+            <div class="detail-section"><strong>雷区</strong><p>${escapeHtml(data.pet_peeves || '')}</p></div>
+            <div class="detail-section"><strong>专长</strong><p>${escapeHtml(data.expertise || '')}</p></div>
+            <div class="detail-section"><strong>爱好</strong><p>${escapeHtml(data.hobbies || '')}</p></div>`;
+        npcDetailModal.style.display = 'flex';
+    } catch (e) { console.error('获取NPC详情失败:', e); }
+}
+
+function editNpcFromDetail() {
+    npcDetailModal.style.display = 'none';
+    if (detailNpcName) openNpcWizard(detailNpcName);
+}
+
+async function deleteNpcFromDetail() {
+    if (!detailNpcName) return;
+    if (!confirm(`确定删除NPC "${detailNpcName}" 吗？此操作不可恢复。`)) return;
+    try {
+        await deleteNpcConfig(detailNpcName);
+        npcDetailModal.style.display = 'none';
+        loadNpcList();
+    } catch (e) {
+        if (e.status === 403) alert('内置NPC不能删除');
+        else alert(`删除失败: ${e.message}`);
+    }
+}
+
+async function deleteNpcCard(name) {
+    if (!confirm(`确定删除NPC "${name}" 吗？`)) return;
+    try {
+        await deleteNpcConfig(name);
+        loadNpcList();
+    } catch (e) { alert(`删除失败: ${e.message}`); }
+}
+
+// ==================== NPC Wizard ====================
+
+async function openNpcWizard(editName) {
+    wizardStep = 1;
+    wizardData = {};
+    if (editName) {
+        wizardMode = 'edit';
+        wizardEditName = editName;
+        wizardTitle.textContent = `编辑NPC: ${editName}`;
+        try {
+            const data = await fetchNpcConfig(editName);
+            wizardData = {
+                name: editName, title: data.title || '', location: data.location || '',
+                activity: data.activity || '', core_personality: data.core_personality || '',
+                personality: data.personality || '', speaking_style: data.speaking_style || '',
+                style: data.style || '', quirks: (data.quirks || []).join('\n'),
+                emotional_triggers_positive: ((data.emotional_triggers || {}).positive || []).join('\n'),
+                emotional_triggers_negative: ((data.emotional_triggers || {}).negative || []).join('\n'),
+                pet_peeves: data.pet_peeves || '', work_context: data.work_context || '',
+                expertise: data.expertise || '', hobbies: data.hobbies || ''
+            };
+        } catch (e) { console.error('加载NPC配置失败:', e); }
+    } else {
+        wizardMode = 'create';
+        wizardEditName = null;
+        wizardTitle.textContent = '创建新NPC';
+    }
+    renderWizardStep();
+    npcWizardModal.style.display = 'flex';
+}
+
+function wizardNavigate(delta) {
+    // Collect current step data
+    const fields = WIZARD_FIELDS[wizardStep] || [];
+    fields.forEach(f => {
+        const el = document.getElementById('wiz_' + f);
+        if (el) wizardData[f] = el.value || '';
+    });
+    wizardStep += delta;
+    if (wizardStep < 1) wizardStep = 1;
+    if (wizardStep > 4) wizardStep = 4;
+    renderWizardStep();
+}
+
+function renderWizardStep() {
+    const fields = WIZARD_FIELDS[wizardStep] || [];
+    const isLast = wizardStep === 4;
+    const isFirst = wizardStep === 1;
+
+    // Update step indicators
+    document.querySelectorAll('.wizard-step').forEach(el => {
+        el.classList.remove('active');
+        if (parseInt(el.dataset.step) === wizardStep) el.classList.add('active');
+    });
+
+    // Render fields
+    wizardContent.innerHTML = fields.map(f => {
+        const val = wizardData[f] || '';
+        const label = WIZARD_LABELS[f] || f;
+        const isTextarea = ['core_personality', 'speaking_style', 'quirks', 'emotional_triggers_positive',
+            'emotional_triggers_negative', 'pet_peeves', 'work_context'].includes(f);
+        const rows = f === 'core_personality' ? 6 : f === 'speaking_style' ? 3 : 3;
+        const disabled = wizardMode === 'edit' && f === 'name';
+
+        if (isTextarea) {
+            return `<div class="wizard-field">
+                <label>${label}</label>
+                <textarea id="wiz_${f}" class="wiz-textarea" rows="${rows}" ${disabled ? 'disabled' : ''}>${escapeHtml(val)}</textarea>
+            </div>`;
+        }
+        return `<div class="wizard-field">
+            <label>${label}</label>
+            <input id="wiz_${f}" class="wiz-input" value="${escapeHtml(val)}" ${disabled ? 'disabled' : ''}>
+        </div>`;
+    }).join('');
+
+    // Show/hide AI bar (only step 1 + create mode)
+    const aiBar = document.querySelector('.ai-generate-bar');
+    if (aiBar) aiBar.style.display = (wizardStep === 1 && wizardMode === 'create') ? 'flex' : 'none';
+
+    // Navigation buttons
+    wizardPrev.style.display = isFirst ? 'none' : 'inline-block';
+    wizardNext.style.display = isLast ? 'none' : 'inline-block';
+    wizardSave.style.display = isLast ? 'inline-block' : 'none';
+}
+
+async function aiGenerateNpc() {
+    const desc = aiGenInput.value.trim();
+    if (!desc) return;
+    aiGenBtn.disabled = true;
+    aiGenBtn.textContent = '生成中...';
+    try {
+        const result = await generateNpcConfig(desc);
+        const c = result.config || {};
+        wizardData = {
+            name: c.name || result.name || '',
+            title: c.title || '', location: c.location || '',
+            activity: c.activity || '', core_personality: c.core_personality || '',
+            personality: c.personality || '', speaking_style: c.speaking_style || '',
+            style: c.style || '', quirks: (c.quirks || []).join('\n'),
+            emotional_triggers_positive: ((c.emotional_triggers || {}).positive || []).join('\n'),
+            emotional_triggers_negative: ((c.emotional_triggers || {}).negative || []).join('\n'),
+            pet_peeves: c.pet_peeves || '', work_context: c.work_context || '',
+            expertise: c.expertise || '', hobbies: c.hobbies || ''
+        };
+        renderWizardStep();
+        aiGenInput.value = '';
+    } catch (e) { alert(`AI生成失败: ${e.message}`); }
+    finally { aiGenBtn.disabled = false; aiGenBtn.textContent = 'AI生成'; }
+}
+
+async function saveNpcFromWizard() {
+    // Collect step 4 data
+    const fields = WIZARD_FIELDS[4] || [];
+    fields.forEach(f => {
+        const el = document.getElementById('wiz_' + f);
+        if (el) wizardData[f] = el.value || '';
+    });
+
+    // Build config
+    const config = {
+        title: wizardData.title || '',
+        location: wizardData.location || '',
+        activity: wizardData.activity || '',
+        core_personality: wizardData.core_personality || '',
+        personality: wizardData.personality || '',
+        speaking_style: wizardData.speaking_style || '',
+        style: wizardData.style || '',
+        quirks: (wizardData.quirks || '').split('\n').filter(s => s.trim()),
+        emotional_triggers: {
+            positive: (wizardData.emotional_triggers_positive || '').split('\n').filter(s => s.trim()),
+            negative: (wizardData.emotional_triggers_negative || '').split('\n').filter(s => s.trim())
+        },
+        pet_peeves: wizardData.pet_peeves || '',
+        work_context: wizardData.work_context || '',
+        expertise: wizardData.expertise || '',
+        hobbies: wizardData.hobbies || ''
+    };
+
+    if (!config.title || !config.core_personality) {
+        alert('职位和核心性格为必填字段');
+        return;
+    }
+
+    try {
+        if (wizardMode === 'create') {
+            if (!wizardData.name) { alert('NPC名称为必填'); return; }
+            await createNpcConfig({ name: wizardData.name, ...config });
+        } else {
+            await updateNpcConfig(wizardEditName, config);
+        }
+        npcWizardModal.style.display = 'none';
+        loadNpcList();
+        // 为新NPC创建聊天列表入口
+        if (wizardMode === 'create' && wizardData.name) {
+            initDefaultConversations([wizardData.name]);
+        }
+    } catch (e) {
+        alert(`${wizardMode === 'create' ? '创建' : '更新'}失败: ${e.message}`);
+    }
+}
+
 // ==================== Helpers ====================
 
 function escapeHtml(str) {
@@ -1007,4 +1320,7 @@ window.startContention = startContention;
 window.stopContention = stopContention;
 window.deleteConversation = deleteConversation;
 window.handleInitiateClick = handleInitiateClick;
+window.openNpcWizard = openNpcWizard;
+window.openNpcDetail = openNpcDetail;
+window.deleteNpcCard = deleteNpcCard;
 window.retryLoadNpcs = () => location.reload();

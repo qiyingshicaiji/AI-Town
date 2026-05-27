@@ -188,3 +188,32 @@ async function resumeSimulation() {
 async function initiateNpcChat(npcName) {
     return apiRequest('POST', `/npc/${encodeURIComponent(npcName)}/initiate`);
 }
+
+/* ==================== NPC Config APIs ==================== */
+
+async function fetchNpcConfigs() {
+    return apiRequest('GET', '/npc-configs', null, { useCache: false });
+}
+
+async function fetchNpcConfig(name) {
+    return apiRequest('GET', `/npc-configs/${encodeURIComponent(name)}`, null, { useCache: false });
+}
+
+async function createNpcConfig(data) {
+    invalidateCache('/npc-configs');
+    return apiRequest('POST', '/npc-configs', data);
+}
+
+async function updateNpcConfig(name, data) {
+    invalidateCache('/npc-configs');
+    return apiRequest('PUT', `/npc-configs/${encodeURIComponent(name)}`, data);
+}
+
+async function deleteNpcConfig(name) {
+    invalidateCache('/npc-configs');
+    return apiRequest('DELETE', `/npc-configs/${encodeURIComponent(name)}`);
+}
+
+async function generateNpcConfig(description) {
+    return apiRequest('POST', '/npc-configs/generate', { description });
+}
