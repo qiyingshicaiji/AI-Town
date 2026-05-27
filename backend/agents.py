@@ -6,6 +6,7 @@ import asyncio
 import threading
 import random
 import re
+import json
 from datetime import datetime, timedelta
 
 # 添加HelloAgents到Python路径
@@ -103,6 +104,80 @@ NPC_ROLES = {
     }
 }
 
+# 内置NPC名称（不可删除）
+BUILT_IN_NPC_NAMES = {"张三", "李四", "王五"}
+
+# NPC配置JSON文件路径
+_NPC_CONFIG_PATH = os.path.join(os.path.dirname(__file__), 'npc_configs.json')
+
+# 硬编码的默认NPC配置（用于首次启动种子数据）
+_DEFAULT_NPC_ROLES = dict(NPC_ROLES)
+
+
+def _load_npc_configs():
+    """从JSON文件加载NPC配置，首次运行时从默认值种子
+
+    重要：永不复写已有文件，防止数据丢失。
+    只在文件不存在或为空时才从硬编码默认值创建。
+    """
+    global NPC_ROLES
+
+    # 检查路径是否为目录（Docker 挂载不当时可能创建目录而非文件）
+    if os.path.isdir(_NPC_CONFIG_PATH):
+        import shutil
+        backup = _NPC_CONFIG_PATH + ".dir_backup"
+        print(f"⚠️ npc_configs.json 路径是目录而非文件！将其重命名为 {backup}")
+        try:
+            shutil.move(_NPC_CONFIG_PATH, backup)
+        except Exception as e:
+            print(f"❌ 无法重命名目录: {e}")
+
+    if os.path.isfile(_NPC_CONFIG_PATH):
+        try:
+            with open(_NPC_CONFIG_PATH, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            loaded = data.get('npcs', {})
+            if loaded:
+                NPC_ROLES = loaded
+                print(f"📂 从 npc_configs.json 加载了 {len(NPC_ROLES)} 个NPC配置")
+                return
+            else:
+                print(f"⚠️ npc_configs.json 的 'npcs' 字段为空，检查文件是否损坏")
+                # 不覆写！保留损坏文件供排查，从硬编码默认启动
+                NPC_ROLES = dict(_DEFAULT_NPC_ROLES)
+                return
+        except json.JSONDecodeError as e:
+            # JSON 损坏：备份原文件，不覆写
+            backup = _NPC_CONFIG_PATH + f".corrupted_{int(datetime.now().timestamp())}"
+            print(f"⚠️ npc_configs.json JSON 解析失败: {e}")
+            print(f"   原文件已备份到: {backup}，使用默认配置启动")
+            try:
+                os.rename(_NPC_CONFIG_PATH, backup)
+            except Exception:
+                pass
+            NPC_ROLES = dict(_DEFAULT_NPC_ROLES)
+            _save_npc_configs()
+            return
+        except Exception as e:
+            print(f"⚠️ 加载 npc_configs.json 失败: {e}，使用默认配置")
+            NPC_ROLES = dict(_DEFAULT_NPC_ROLES)
+            return
+
+    # 文件不存在：从硬编码默认值创建
+    NPC_ROLES = dict(_DEFAULT_NPC_ROLES)
+    _save_npc_configs()
+    print(f"📝 首次运行，已将 {len(NPC_ROLES)} 个默认NPC写入 npc_configs.json")
+
+
+def _save_npc_configs():
+    """将当前NPC_ROLES写入JSON文件"""
+    try:
+        with open(_NPC_CONFIG_PATH, 'w', encoding='utf-8') as f:
+            json.dump({'npcs': dict(NPC_ROLES)}, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"❌ 保存 npc_configs.json 失败: {e}")
+
+
 def create_system_prompt(name: str, role: Dict[str, str]) -> str:
     """创建NPC的系统提示词 — 性格驱动"""
     cp = role.get("core_personality", role.get("personality", ""))
@@ -151,6 +226,9 @@ class NPCAgentManager:
         """初始化所有NPC Agent"""
         print("🤖 正在初始化NPC Agent系统...")
 
+        # 从JSON加载NPC配置（首次运行自动种子）
+        _load_npc_configs()
+
         try:
             self.llm = HelloAgentsLLM()
             print("✅ LLM初始化成功")
@@ -160,21 +238,18 @@ class NPCAgentManager:
             self.llm = None
 
         self.agents: Dict[str, SimpleAgent] = {}
-        self.memories: Dict[str, MemoryManager] = {}  # ⭐ NPC记忆管理器
-        self.relationship_manager: Optional[RelationshipManager] = None  # ⭐ 好感度管理器
+        self.memories: Dict[str, MemoryManager] = {}
+        self.relationship_manager: Optional[RelationshipManager] = None
 
-        # ⭐ NPC 状态机: {npc_name: {"state": "idle", "since": datetime, "timeout": seconds}}
         self.npc_states: Dict[str, dict] = {}
         self._state_lock = threading.Lock()
         self._state_check_task: Optional[asyncio.Task] = None
 
-        # 初始化好感度管理器
         if self.llm:
             self.relationship_manager = RelationshipManager(self.llm)
 
         self._create_agents()
 
-        # 初始化所有 NPC 为 IDLE
         for name in NPC_ROLES:
             self.set_npc_state(name, "idle")
 
@@ -190,32 +265,220 @@ class NPCAgentManager:
     
     def _create_agents(self):
         """创建所有NPC Agent和记忆系统"""
-        for name, role in NPC_ROLES.items():
+        for name in NPC_ROLES:
+            self._create_single_agent(name)
+
+    def _create_single_agent(self, name: str):
+        """为单个NPC创建Agent和记忆系统"""
+        role = NPC_ROLES.get(name)
+        if not role:
+            print(f"⚠️ {name} 配置不存在，跳过")
+            return
+
+        try:
+            system_prompt = create_system_prompt(name, role)
+            if self.llm:
+                agent = SimpleAgent(
+                    name=f"{name}-{role['title']}",
+                    llm=self.llm,
+                    system_prompt=system_prompt
+                )
+            else:
+                agent = None
+
+            self.agents[name] = agent
+            self.memories[name] = self._create_memory_manager(name)
+            print(f"✅ {name}({role['title']}) Agent创建成功")
+        except Exception as e:
+            print(f"❌ {name} Agent创建失败: {e}")
+            self.agents[name] = None
+            self.memories[name] = None
+
+    def _rebuild_agent(self, name: str):
+        """重建NPC的Agent（保留记忆），用于更新NPC配置后"""
+        role = NPC_ROLES.get(name)
+        if not role:
+            return
+
+        try:
+            system_prompt = create_system_prompt(name, role)
+            if self.llm:
+                self.agents[name] = SimpleAgent(
+                    name=f"{name}-{role['title']}",
+                    llm=self.llm,
+                    system_prompt=system_prompt
+                )
+            print(f"🔄 {name} Agent已重建（记忆已保留）")
+        except Exception as e:
+            print(f"❌ {name} Agent重建失败: {e}")
+
+    # ==================== NPC CRUD ====================
+
+    def add_npc(self, name: str, config: dict) -> dict:
+        """新增NPC角色
+
+        Args:
+            name: NPC名称
+            config: NPC配置字典（需包含 title, core_personality）
+
+        Returns:
+            创建后的完整配置
+
+        Raises:
+            ValueError: 验证失败
+        """
+        name = name.strip()
+        if not name:
+            raise ValueError("NPC名称不能为空")
+        if name in NPC_ROLES:
+            raise ValueError(f"NPC '{name}' 已存在")
+        if not config.get("title"):
+            raise ValueError("title 为必填字段")
+        if not config.get("core_personality"):
+            raise ValueError("core_personality 为必填字段")
+
+        # 填充默认值
+        full_config = {
+            "title": config.get("title", ""),
+            "location": config.get("location", "工位区"),
+            "activity": config.get("activity", "办公"),
+            "core_personality": config.get("core_personality", ""),
+            "personality": config.get("personality", config.get("core_personality", "")[:30]),
+            "work_context": config.get("work_context", ""),
+            "speaking_style": config.get("speaking_style", ""),
+            "style": config.get("style", ""),
+            "quirks": config.get("quirks", []),
+            "emotional_triggers": config.get("emotional_triggers", {"positive": [], "negative": []}),
+            "pet_peeves": config.get("pet_peeves", ""),
+            "expertise": config.get("expertise", ""),
+            "hobbies": config.get("hobbies", ""),
+        }
+
+        NPC_ROLES[name] = full_config
+        self._create_single_agent(name)
+        self.set_npc_state(name, "idle")
+        _save_npc_configs()
+
+        # 通知所有现有NPC：新同事入职
+        self._notify_new_colleague(name, full_config)
+
+        self._sync_knowledge()
+        print(f"➕ 新增NPC: {name} ({full_config['title']})")
+        return dict(full_config)
+
+    def update_npc(self, name: str, config: dict) -> dict:
+        """更新NPC角色（部分合并）
+
+        Args:
+            name: NPC名称
+            config: 要更新的字段（部分）
+
+        Returns:
+            更新后的完整配置
+        """
+        name = name.strip()
+        if name not in NPC_ROLES:
+            raise ValueError(f"NPC '{name}' 不存在")
+
+        existing = NPC_ROLES[name]
+        merged = dict(existing)
+
+        # 合并顶层字段
+        for key in ["title", "location", "activity", "core_personality", "personality",
+                     "work_context", "speaking_style", "style", "pet_peeves", "expertise", "hobbies"]:
+            if key in config and config[key]:
+                merged[key] = config[key]
+
+        # 合并列表字段
+        if "quirks" in config:
+            merged["quirks"] = list(config["quirks"])
+
+        # 合并嵌套字典
+        if "emotional_triggers" in config:
+            existing_triggers = dict(existing.get("emotional_triggers", {}))
+            new_triggers = config["emotional_triggers"]
+            if "positive" in new_triggers:
+                existing_triggers["positive"] = list(new_triggers["positive"])
+            if "negative" in new_triggers:
+                existing_triggers["negative"] = list(new_triggers["negative"])
+            merged["emotional_triggers"] = existing_triggers
+
+        NPC_ROLES[name] = merged
+        self._rebuild_agent(name)
+        _save_npc_configs()
+        self._sync_knowledge()
+        print(f"✏️ 更新NPC: {name}")
+        return dict(merged)
+
+    def delete_npc(self, name: str) -> bool:
+        """删除NPC角色
+
+        Args:
+            name: NPC名称
+
+        Returns:
+            是否成功删除
+        """
+        name = name.strip()
+        if name not in NPC_ROLES:
+            raise ValueError(f"NPC '{name}' 不存在")
+        if name in BUILT_IN_NPC_NAMES:
+            raise PermissionError(f"内置NPC '{name}' 不能删除")
+
+        del NPC_ROLES[name]
+        self.agents.pop(name, None)
+        self.memories.pop(name, None)
+        self.npc_states.pop(name, None)
+
+        # 清理记忆目录
+        import shutil
+        memory_dir = os.path.join(os.path.dirname(__file__), 'memory_data', name)
+        if os.path.exists(memory_dir):
             try:
-                system_prompt = create_system_prompt(name, role)
-
-                if self.llm:
-                    agent = SimpleAgent(
-                        name=f"{name}-{role['title']}",
-                        llm=self.llm,
-                        system_prompt=system_prompt
-                    )
-                else:
-                    # 模拟模式
-                    agent = None
-
-                self.agents[name] = agent
-
-                # ⭐ 创建记忆管理器
-                memory_manager = self._create_memory_manager(name)
-                self.memories[name] = memory_manager
-
-                print(f"✅ {name}({role['title']}) Agent创建成功 (记忆系统已启用)")
-
+                shutil.rmtree(memory_dir)
             except Exception as e:
-                print(f"❌ {name} Agent创建失败: {e}")
-                self.agents[name] = None
-                self.memories[name] = None
+                print(f"⚠️ 清理记忆目录失败 ({name}): {e}")
+
+        _save_npc_configs()
+        self._sync_knowledge()
+        print(f"🗑 删除NPC: {name}")
+        return True
+
+    def _sync_knowledge(self):
+        """NPC 变更后同步信息到知识库"""
+        if hasattr(self, 'knowledge_manager') and self.knowledge_manager:
+            try:
+                self.knowledge_manager.sync_npc_info(NPC_ROLES)
+            except Exception:
+                pass
+
+    def _notify_new_colleague(self, new_name: str, config: dict):
+        """向所有现有NPC注入新同事入职的感知记忆"""
+        title = config.get("title", "")
+        personality = config.get("personality", "")
+        timeline_id = getattr(self.timeline_manager, '_active_timeline_id', None) if hasattr(self, 'timeline_manager') else None
+
+        for existing_name in self.agents:
+            if existing_name == new_name:
+                continue
+            mem_mgr = self.memories.get(existing_name)
+            if not mem_mgr:
+                continue
+            try:
+                mem_mgr.add_memory(
+                    content=f"办公室来了一位新同事：{new_name}，ta是{title}。{personality}",
+                    memory_type="perceptual",
+                    importance=0.8,
+                    metadata={
+                        "observation_type": "new_colleague",
+                        "new_npc": new_name,
+                        "timeline_id": timeline_id,
+                        "timestamp": datetime.now().isoformat(),
+                        "modality": "text",
+                    }
+                )
+            except Exception as e:
+                print(f"⚠️ 通知 {existing_name} 新同事入职失败: {e}")
 
     def _create_memory_manager(self, npc_name: str) -> MemoryManager:
         """为NPC创建记忆管理器"""
@@ -928,6 +1191,26 @@ class NPCAgentManager:
             prompt_parts.append(memory_text)
         if anti_repeat_text:
             prompt_parts.append(anti_repeat_text)
+
+        # 同事信息（嵌入该NPC的已知同事情报名册）
+        all_npc_names = list(NPC_ROLES.keys())
+        other_names = [n for n in all_npc_names if n != npc_name]
+        if other_names:
+            colleague_lines = ["【你認識的其他同事】"]
+            for n in other_names:
+                r = NPC_ROLES.get(n, {})
+                p = r.get("personality", "")
+                if len(p) > 30:
+                    p = p[:30] + "..."
+                colleague_lines.append(f"- {n}：{r.get('title', '')}，{p}")
+            prompt_parts.append("\n".join(colleague_lines))
+
+        # 防编造规则（始终注入）
+        prompt_parts.append(
+            "【重要规则】如果被问到你不了解的人或事，先参考上方列出的同事信息。"
+            "如果那里也没有，就说\"我不太清楚\"，绝对不要编造。"
+        )
+
         prompt_parts.append(instruction)
 
         prompt = "\n\n".join(prompt_parts)

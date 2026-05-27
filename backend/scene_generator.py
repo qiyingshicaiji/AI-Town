@@ -21,6 +21,7 @@ class SceneGenerator:
         self.npc_manager = npc_manager
         self.timeline_manager = timeline_manager
         self.llm = llm
+        self.knowledge_manager = None  # 由 startup 注入（KnowledgeManager 封装 RAGTool）
         try:
             from character_evolution import CharacterEvolution
             self.evolution = CharacterEvolution(npc_manager)
@@ -49,7 +50,7 @@ class SceneGenerator:
         # 获取事件
         event_text = self.timeline_manager.get_event_context() or "办公室日常工作"
 
-        # 构建角色描述
+        # 构建角色描述（内含同事信息）
         roles_text = self._build_roles_text(npc_names, affinity_context)
 
         # 构建历史（含跨场景记忆查询）
@@ -74,6 +75,30 @@ class SceneGenerator:
         # 额外上下文（如最近对话历史，用于避免重复）
         extra_text = f"\n{extra_context}" if extra_context else ""
 
+        # === 知识检索（仅玩家消息触发） ===
+        knowledge_text = ""
+        if trigger_message and self.knowledge_manager:
+            lore_context = self.knowledge_manager.query(trigger_message)
+            if lore_context:
+                fact_answer = self._generate_fact(trigger_message, lore_context)
+                if fact_answer:
+                    knowledge_text = f"""
+【专业知识 — 请用你的风格自然表达以下信息】
+{fact_answer}
+
+【参考资料】
+{lore_context}
+"""
+            else:
+                knowledge_text = ""
+
+        # 防编造规则（始终注入 — 同事信息已嵌入上方角色档案中）
+        anti_hallucination = (
+            "\n【重要规则 — 关于你不认识的人】\n"
+            "如果被问到你不了解的人或事，先参考上方角色档案中列出的同事信息。\n"
+            "如果档案里也没有相关信息，就说\"我不太清楚\"或\"我没听说过\"，绝对不要编造任何信息。\n"
+        )
+
         prompt = f"""你是一个对话生成器。根据角色和背景，生成一段自然的聊天对话。
 
 {roles_text}
@@ -81,7 +106,7 @@ class SceneGenerator:
 【今日事件】{event_text}
 
 {history_text}
-{extra_text}
+{extra_text}{knowledge_text}{anti_hallucination}
 {trigger_text}
 
 {rules}
@@ -119,10 +144,54 @@ class SceneGenerator:
             print(f"⚠️ 场景生成失败: {e}")
             return self._fallback_scene(npc_names, is_group, is_npc_npc, trigger_message)
 
+    # ==================== Knowledge Grounding ====================
+
+    def _generate_fact(self, question: str, lore: str) -> str:
+        """低温生成事实性回答（双调用第一步）
+
+        Args:
+            question: 用户问题
+            lore: RAG 检索到的参考资料
+
+        Returns:
+            简洁的事实陈述，或空字符串（失败时）
+        """
+        if not self.llm:
+            return ""
+
+        prompt = f"""根据以下参考资料，回答问题。只输出事实性回答，不要修饰、不要角色扮演、不要添加参考资料中没有的信息。
+
+【参考资料】
+{lore}
+
+【问题】
+{question}
+
+【事实回答】"""
+
+        try:
+            from hello_agents import SimpleAgent
+            agent = SimpleAgent(
+                name="FactExtractor",
+                llm=self.llm,
+                system_prompt="你是事实提取器。只输出基于参考资料的事实回答，严格不编造。"
+            )
+            response = agent.run(prompt, temperature=0.1)
+            response = response.strip()
+            if len(response) < 5:
+                return ""
+            return response
+        except Exception as e:
+            print(f"⚠️ 事实生成失败: {e}")
+            return ""
+
     # ==================== Prompt Builders ====================
 
     def _build_roles_text(self, npc_names, affinities):
         """构建角色描述 — 性格优先，工作为背景"""
+        from agents import NPC_ROLES
+        all_npc_names = list(NPC_ROLES.keys())
+
         parts = []
         for name in npc_names:
             info = self.npc_manager.get_npc_info(name)
@@ -130,7 +199,6 @@ class SceneGenerator:
                 continue
 
             # 从完整 NPC_ROLES 获取深度信息
-            from agents import NPC_ROLES
             full_role = NPC_ROLES.get(name, {})
 
             cp = full_role.get("core_personality", info.get("personality", ""))
@@ -141,6 +209,22 @@ class SceneGenerator:
             pos_t = "、".join(triggers.get("positive", [])[:3])
             neg_t = "、".join(triggers.get("negative", [])[:3])
             pet = full_role.get("pet_peeves", "")
+
+            # 构建该角色认识的所有同事（除自己外）
+            colleague_lines = []
+            for other_name in all_npc_names:
+                if other_name == name:
+                    continue
+                other_role = NPC_ROLES.get(other_name, {})
+                other_title = other_role.get("title", "")
+                other_personality = other_role.get("personality", "")
+                if len(other_personality) > 30:
+                    other_personality = other_personality[:30] + "..."
+                colleague_lines.append(f"  - {other_name}：{other_title}，{other_personality}")
+
+            colleague_text = ""
+            if colleague_lines:
+                colleague_text = "你认识的其他同事：\n" + "\n".join(colleague_lines)
 
             aff = affinities.get(name, 50) if affinities else 50
             if aff >= 80:
@@ -156,6 +240,8 @@ class SceneGenerator:
 
             parts.append(f"""【{name}】
 {cp}
+
+{colleague_text}
 
 工作背景: {work}
 说话风格: {speak}

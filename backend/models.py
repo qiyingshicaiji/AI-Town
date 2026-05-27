@@ -180,3 +180,58 @@ class AckPendingRequest(BaseModel):
     npc_name: Optional[str] = Field(None, description="如果指定，仅确认该NPC的消息")
     message_keys: Optional[List[str]] = Field(None, description="要确认的特定消息key列表")
 
+# ==================== NPC 配置管理模型 ====================
+
+class NpcConfigCreate(BaseModel):
+    """创建 NPC 配置请求"""
+    name: str = Field(..., min_length=1, max_length=20, description="NPC名称")
+    title: str = Field(..., min_length=1, description="职位")
+    location: Optional[str] = Field("工位区", description="位置")
+    activity: Optional[str] = Field("办公", description="活动")
+    core_personality: str = Field(..., min_length=1, description="核心性格描述")
+    personality: Optional[str] = Field("", description="性格简短总结")
+    work_context: Optional[str] = Field("", description="工作背景")
+    speaking_style: Optional[str] = Field("", description="说话风格")
+    style: Optional[str] = Field("", description="风格简短总结")
+    quirks: Optional[List[str]] = Field(default_factory=list, description="小习惯")
+    emotional_triggers: Optional[dict] = Field(default_factory=dict, description="情绪触发点")
+    pet_peeves: Optional[str] = Field("", description="雷区")
+    expertise: Optional[str] = Field("", description="专长")
+    hobbies: Optional[str] = Field("", description="爱好")
+
+
+class NpcConfigUpdate(BaseModel):
+    """更新 NPC 配置请求（所有字段可选）"""
+    title: Optional[str] = Field(None, description="职位")
+    location: Optional[str] = Field(None, description="位置")
+    activity: Optional[str] = Field(None, description="活动")
+    core_personality: Optional[str] = Field(None, description="核心性格描述")
+    personality: Optional[str] = Field(None, description="性格简短总结")
+    work_context: Optional[str] = Field(None, description="工作背景")
+    speaking_style: Optional[str] = Field(None, description="说话风格")
+    style: Optional[str] = Field(None, description="风格简短总结")
+    quirks: Optional[List[str]] = Field(None, description="小习惯")
+    emotional_triggers: Optional[dict] = Field(None, description="情绪触发点")
+    pet_peeves: Optional[str] = Field(None, description="雷区")
+    expertise: Optional[str] = Field(None, description="专长")
+    hobbies: Optional[str] = Field(None, description="爱好")
+
+
+class NpcConfigSummary(BaseModel):
+    """NPC 配置摘要（列表用）"""
+    name: str
+    title: str
+    personality: str
+    is_builtin: bool = False
+
+
+class NpcConfigListResponse(BaseModel):
+    """NPC 配置列表响应"""
+    npcs: List[NpcConfigSummary] = Field(default_factory=list)
+    total: int = Field(0)
+
+
+class NpcGenerateRequest(BaseModel):
+    """AI 生成 NPC 请求"""
+    description: str = Field(..., min_length=1, max_length=200, description="一句话角色描述")
+
