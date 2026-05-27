@@ -1,0 +1,18 @@
+# Express BFF + React 静态文件
+FROM node:20-alpine
+
+WORKDIR /app
+
+# BFF dependencies
+COPY bff/package.json bff/package-lock.json* ./
+RUN npm ci --production=false
+
+# BFF source
+COPY bff/ ./
+
+# Frontend build output
+COPY frontend/dist/ ./frontend/dist/
+
+EXPOSE 3000
+
+CMD ["node", "dist/index.js"]
