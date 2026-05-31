@@ -58,8 +58,8 @@ NPC 通过三个通道观察世界，不再只依赖群聊上下文认识彼此�
 
 ### 知识库 RAG 与反幻觉机制
 
-- **LoreManager**：Markdown 知识库 → 按 `##` 标题分块 → 向量嵌入 → 余弦相似度检索
-- **嵌入回退链**：DashScope API（REST 模式兼容 OpenAI）→ 本地 sentence-transformers → TF-IDF（scikit-learn）
+- **KnowledgeManager**：基于 hello_agents RAGTool，MarkItDown 多格式文档转换（PDF/Word/图片等 45+ 格式），自动分块 + 向量嵌入 + Qdrant 存储
+- **嵌入模型**：通过 hello_agents 的 `EMBED_MODEL_TYPE` 环境变量配置，支持 DashScope（OpenAI 兼容 REST）→ local（sentence-transformers）→ TF-IDF 三级回退
 - **双 LLM 调用**：低温（0.1）提取事实 → 高温（0.9）角色演绎，兼顾准确性与人格表现力
 - **同事名册注入**：所有对话 prompt 的角色档案中动态嵌入全员名册，NPC"认识"所有同事，名册外的就说"不太清楚"
 
@@ -92,11 +92,11 @@ NPC 通过三个通道观察世界，不再只依赖群聊上下文认识彼此�
 ```
 AI-Town/
 ├── backend/
-│   ├── main.py                  # FastAPI 应用 & 全部 41 个 API 路由
+│   ├── main.py                  # FastAPI 应用 & 全部 API 路由
 │   ├── agents.py                # NPC Agent 管理、CRUD、核心对话流程、防重复发言
 │   ├── relationship_manager.py  # 好感度系统（玩家 & NPC 间）
 │   ├── scene_generator.py       # 统一场景生成引擎（含同事名册注入、防编造规则）
-│   ├── lore_manager.py          # 知识库 RAG 管理器（向量检索 + 关键词回退）
+│   ├── knowledge_manager.py     # 知识库 RAG 管理器（基于 hello_agents RAGTool）
 │   ├── state_manager.py         # 后台定时循环调度 + 暂停控制
 │   ├── autonomous_thinker.py    # NPC 主动发起对话引擎
 │   ├── npc_npc_chat.py          # NPC 间聊天触发 & 管理
@@ -105,30 +105,35 @@ AI-Town/
 │   ├── character_evolution.py   # 角色成长追踪
 │   ├── timeline_manager.py      # 时间线/天数/事件管理
 │   ├── logger.py                # 日志系统
-│   ├── config.py                # 全局配置（含嵌入模型参数）
+│   ├── config.py                # 全局配置
 │   ├── models.py                # Pydantic 数据模型
 │   ├── npc_configs.json         # NPC 配置持久化文件
 │   ├── knowledge/               # 知识库 Markdown 文件
-│   │   └── ai_town.md           # 办公室背景设定（可手动编辑扩展）
+│   │   └── ai_town.md           # 办公室背景设定
 │   ├── memory_data/             # 每个 NPC 的记忆数据（SQLite）
 │   ├── timeline_data/           # 时间线持久化
 │   └── logs/                    # 日志文件
-├── frontend/
-│   ├── index.html               # 主页面
-│   ├── css/
-│   │   └── style.css            # 完整样式（响应式布局，4 断点）
-│   └── js/
-│       ├── app.js               # 主应用逻辑（对话渲染、SSE、向导、NPC管理、轮询）
-│       ├── api.js               # API 封装（22 端点，请求去重+缓存+重试）
-│       ├── state.js             # 前端全局状态管理（发布/订阅模式）
-│       ├── storage.js           # localStorage 持久化（对话列表+消息）
-│       └── god.js               # 上帝模式面板（时间线管理）
-├── docker-compose.yml           # Docker 编排（backend + frontend + 可选 Qdrant/Neo4j）
+├── bff/                         # Express BFF 层（安全 + API 代理 + 静态文件）
+│   ├── src/index.ts             # Express 入口
+│   ├── src/routes/api.ts        # /api/* → FastAPI 代理（含 SSE 流式穿透）
+│   ├── src/routes/health.ts     # 聚合健康检查
+│   └── src/middleware/          # helmet + CORS + 限流 + 日志
+├── frontend/                    # React + TypeScript + Vite 前端
+│   ├── src/
+│   │   ├── App.tsx              # 应用根组件
+│   │   ├── main.tsx             # 入口
+│   │   ├── api/client.ts        # API 客户端
+│   │   ├── components/ui/       # 通用 UI 组件（Modal, Toast, Button 等）
+│   │   ├── components/business/ # 业务组件（ChatInput, ConvList, NpcCard 等）
+│   │   ├── features/            # 功能模块（chat, wizard, npc-manager, god-panel）
+│   │   ├── hooks/               # 自定义 hooks（useSSE, usePolling, useApi）
+│   │   ├── stores/              # Zustand 状态管理
+│   │   └── types/               # TypeScript 类型定义
+│   ├── vite.config.ts
+│   └── tsconfig.json
+├── docker-compose.yml           # Docker 编排（backend + BFF + 可选 Qdrant/Neo4j）
 ├── Dockerfile.backend           # 后端镜像（Python 3.11）
-├── Dockerfile.frontend          # 前端镜像（nginx）
-├── docs/
-│   └── superpowers/
-│       └── specs/               # 设计文档
+├── Dockerfile.bff               # BFF 镜像（Node 20 Alpine）
 └── README.md
 ```
 
@@ -259,6 +264,8 @@ asyncio 事件循环
 
 ## 前端架构
 
+React + TypeScript + Vite，Zustand 状态管理，SSE 流式对话渲染。
+
 ### 布局示意
 
 ```
@@ -318,14 +325,15 @@ asyncio 事件循环
 ### 嵌入模型配置
 
 ```env
-EMBED_MODEL_TYPE="openai"          # hello_agents 的类型名（兼容 OpenAI REST 模式）
-EMBED_MODEL_NAME="embedding-2"     # 智谱 embedding-2
-EMBED_BASE_URL="https://open.bigmodel.cn/api/paas/v4/"
+EMBED_MODEL_TYPE=dashscope        # hello_agents 嵌入类型（支持 OpenAI 兼容 REST）
+EMBED_MODEL_NAME=embedding-2      # 智谱 embedding-2（1024 维）
+EMBED_BASE_URL=https://open.bigmodel.cn/api/paas/v4/
+EMBED_API_KEY=your_api_key        # 与 LLM_API_KEY 共用智谱 API Key
 ```
 
 回退链：REST API（智谱）→ 本地 sentence-transformers → TF-IDF（scikit-learn）
 
-如果三层全部失败，LoreManager 自动回退到关键词匹配模式，不影响系统运行。
+如果全部失败，KnowledgeManager 会打印警告，不影响系统运行。
 
 ---
 
@@ -347,7 +355,7 @@ docker compose down
 | 服务 | 端口 | 说明 |
 |------|------|------|
 | Backend | 8000 | FastAPI + 文档 `/docs` |
-| Frontend | 8090 | Nginx 静态文件 + API 代理 |
+| BFF | 8090 | Express + React 静态文件 + API 代理 |
 | Qdrant（可选） | 6333/6334 | 本地向量数据库，`--profile local` |
 | Neo4j（可选） | 7474/7687 | 本地图数据库，`--profile local` |
 
@@ -368,10 +376,11 @@ docker compose down
 | 层 | 技术 |
 |----|------|
 | 后端框架 | FastAPI + Python 3.11 |
-| AI 框架 | HelloAgents（SimpleAgent + MemoryManager） |
+| AI 框架 | HelloAgents（SimpleAgent + MemoryManager + RAGTool） |
 | LLM | 可配置（智谱 GLM / OpenAI / DeepSeek / 本地模型） |
 | 记忆存储 | SQLite（权威存储） + Qdrant（向量检索） |
 | 嵌入模型 | 智谱 embedding-2（OpenAI 兼容 REST）→ local → TF-IDF |
-| 前端 | 原生 HTML/CSS/JS，SSE 流式渲染，localStorage 持久化 |
+| BFF | Express + TypeScript（helmet + CORS + 限流 + API 代理） |
+| 前端 | React + TypeScript + Vite，Zustand 状态管理，SSE 流式 |
 | 异步 | asyncio 后台任务调度 |
-| 容器化 | Docker Compose，Nginx 反向代理，健康检查 |
+| 容器化 | Docker Compose，健康检查，卷挂载持久化 |
