@@ -7,6 +7,7 @@
 """
 
 import os
+import threading
 from typing import List, Optional
 
 
@@ -23,13 +24,14 @@ class KnowledgeManager:
 
     def __init__(self, knowledge_dir: str):
         self._knowledge_dir = os.path.abspath(knowledge_dir)
-        self._rag = None  # 延迟初始化（避免 Qdrant 连接失败阻塞启动）
-        self._init_rag()
+        self._rag = None
+        self._init_rag()          # 只创建 RAGTool 实例
+        self._import_if_needed()  # 集合为空才导入文件
 
     # ==================== 初始化 ====================
 
     def _init_rag(self):
-        """初始化 RAGTool 并导入知识库文件"""
+        """初始化 RAGTool 实例（不导入文件，避免阻塞启动）"""
         try:
             from hello_agents.tools import RAGTool
 
@@ -38,11 +40,31 @@ class KnowledgeManager:
                 collection_name="ai_town_knowledge",
                 rag_namespace="ai_town",
             )
-            self._ingest_all()
-            print(f"📚 知识库已初始化 (RAGTool, 目录: {self._knowledge_dir})")
+            print(f"📚 知识库 RAGTool 已初始化 (目录: {self._knowledge_dir})")
         except Exception as e:
             print(f"⚠️ 知识库 RAGTool 初始化失败: {e}")
             self._rag = None
+
+    def _collection_has_data(self) -> bool:
+        """检查 Qdrant 集合是否已有向量数据"""
+        if not self._rag:
+            return True  # RAG 不可用时，跳过导入
+        try:
+            stats = self._rag._get_stats()
+            for line in stats.split("\n"):
+                if "文档分块数" in line and ": 0" in line:
+                    return False
+            return True
+        except Exception:
+            return False  # 无法获取统计时尝试导入
+
+    def _import_if_needed(self):
+        """只在集合为空时导入知识库文件（后台线程，不阻塞启动）"""
+        if self._collection_has_data():
+            print("📚 知识库集合已有数据，跳过导入")
+            return
+        print("📭 知识库集合为空，后台开始首次导入（大知识库可能需要几分钟）...")
+        threading.Thread(target=self._ingest_all, daemon=True).start()
 
     def _ingest_all(self):
         """扫描知识库目录，批量导入所有文件"""
@@ -60,16 +82,21 @@ class KnowledgeManager:
         except Exception as e:
             print(f"⚠️ 知识库文件导入失败: {e}")
 
+    # 文本文件扩展名（避免导入图片、字体等二进制文件污染向量库）
+    _TEXT_EXTENSIONS = {'.md', '.txt', '.rst', '.html', '.htm', '.csv', '.json', '.xml', '.yaml', '.yml', '.py', '.js', '.ts', '.css', '.log'}
+
     def _list_files(self) -> List[str]:
-        """递归列出知识库目录中所有文件（含子目录）"""
+        """递归列出知识库目录中文本文件（跳过二进制文件）"""
         if not os.path.isdir(self._knowledge_dir):
             return []
         files = []
         for root, dirs, fnames in os.walk(self._knowledge_dir):
-            # 跳过隐藏目录
             dirs[:] = [d for d in dirs if not d.startswith(".")]
             for fname in fnames:
-                if not fname.startswith("."):
+                if fname.startswith("."):
+                    continue
+                ext = os.path.splitext(fname)[1].lower()
+                if ext in self._TEXT_EXTENSIONS:
                     files.append(os.path.join(root, fname))
         return sorted(files)
 

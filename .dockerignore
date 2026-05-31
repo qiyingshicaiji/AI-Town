@@ -1,0 +1,32 @@
+# Node
+bff/node_modules/
+
+# Old frontend (already deleted)
+frontend-old/
+
+# Python artifacts
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Environment files
+.env
+.env.local
+backend/.env
+backend/.env.local
+
+# Python virtual environment
+.venv/
+venv/
+
+# Logs and databases
+backend/logs/
+*.db
+*.sqlite3
+
+# Temp/backup files
+*.bak
+*.tmp
+
+# Git
+.git/

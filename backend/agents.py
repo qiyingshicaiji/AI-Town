@@ -606,7 +606,7 @@ class NPCAgentManager:
                     event_context = f"""【今日事件】
 今天办公室发生了：{event_text}
 请在你的对话中自然地提及或回应这件事。
-
+对话时可以添加丰富的颜文字或者标点符号来表达你的情绪反应。颜文字示例：开心时可以用 (^_^) (≧▽≦)，生气时可以用 (╬▔皿▔)╯，惊讶时可以用 (⊙_⊙)。
 """
             except Exception:
                 pass
@@ -657,7 +657,17 @@ class NPCAgentManager:
                 except Exception:
                     pass
 
-            enhanced_message = event_context + affinity_context + perception_context
+            # ⭐ 3.5. 检索知识库 (RAG)
+            knowledge_context = ""
+            if hasattr(self, 'knowledge_manager') and self.knowledge_manager:
+                try:
+                    lore = self.knowledge_manager.query(message)
+                    if lore:
+                        knowledge_context = f"【专业知识 — 请用你的风格自然表达以下信息】\n{lore}\n\n"
+                except Exception:
+                    pass
+
+            enhanced_message = event_context + affinity_context + perception_context + knowledge_context
             if memory_context:
                 enhanced_message += f"{memory_context}\n\n"
             enhanced_message += f"【当前对话】\n玩家: {message}"
@@ -837,9 +847,9 @@ class NPCAgentManager:
                 if consolidated > 0:
                     print(f"  🔄 {npc_name}: 整合了 {consolidated} 条记忆 (working→episodic)")
                     # 低重要性記憶遺忘
-                    forgotten = memory_manager.forget_low_importance(
-                        memory_type="working",
-                        importance_threshold=0.4
+                    forgotten = memory_manager.forget_memories(
+                        strategy="importance_based",
+                        threshold=0.4
                     )
                     if forgotten > 0:
                         print(f"  🧹 {npc_name}: 遗忘了 {forgotten} 条低重要性工作记忆")
@@ -1390,13 +1400,13 @@ class NPCAgentManager:
         try:
             if memory_type:
                 # 清空指定类型的记忆
-                memory_manager.clear_memory_type(memory_type)
+                memory_manager.memory_types[memory_type].clear()
                 print(f"✅ 已清空{npc_name}的{memory_type}记忆")
             else:
                 # 清空所有记忆
                 for mem_type in ["working", "episodic"]:
                     try:
-                        memory_manager.clear_memory_type(mem_type)
+                        memory_manager.memory_types[mem_type].clear()
                     except:
                         pass
                 print(f"✅ 已清空{npc_name}的所有记忆")
