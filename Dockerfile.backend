@@ -9,8 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Python dependencies
 COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
-
+RUN pip install --no-cache-dir -r requirements.txt
 # Patch: 新版 qdrant-client CollectionInfo 无 vectors_count 属性
 RUN python -c "import hello_agents.memory.storage.qdrant_store as m; import re; p=m.__file__; c=open(p).read(); c=c.replace('collection_info.vectors_count','collection_info.points_count'); open(p,'w').write(c); print('Patched:', p)"
 

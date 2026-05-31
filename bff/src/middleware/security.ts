@@ -10,7 +10,7 @@ import { Router } from 'express';
 
 export const securityMiddleware = Router();
 
-// Helmet: 设置安全 HTTP 头（CSP、X-Frame-Options、X-Content-Type-Options 等）
+// Helmet: 安全 HTTP 头（HTTP 部署时关闭 HTTPS 专属策略）
 securityMiddleware.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -20,12 +20,17 @@ securityMiddleware.use(helmet({
       connectSrc: ["'self'", "http://localhost:*"],
     },
   },
+  // HTTP 部署下关闭这两个，否则浏览器会报 COOP/Origin-Agent-Cluster 警告
+  crossOriginOpenerPolicy: false,
+  originAgentCluster: false,
+  // HSTS 在纯 HTTP 下必须关掉，否则浏览器后续会强制 HTTPS
+  strictTransportSecurity: false,
 }));
 
-// CORS: 跨域请求控制
+// CORS: 跨域请求控制（HTTP 部署允许任意来源，否则 JS 资源加载会被拦截）
 securityMiddleware.use(cors({
-  origin: ['http://localhost:5173', 'http://localhost:8090', 'http://127.0.0.1:5173'],
-  credentials: true,
+  origin: '*',
+  credentials: false,
 }));
 
 // Rate Limiting: 100 req/s 防止滥用
