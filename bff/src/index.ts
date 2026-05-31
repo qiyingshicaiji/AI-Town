@@ -36,7 +36,7 @@ app.use('/health', healthRouter(BACKEND_URL));
 app.use('/api', apiProxyRouter(BACKEND_URL));
 
 // 生产环境：托管 React 构建产物
-const staticDir = path.join(__dirname, '..', '..', 'frontend', 'dist');
+const staticDir = path.join(__dirname, '..', 'frontend');
 app.use(express.static(staticDir));
 
 // SPA fallback

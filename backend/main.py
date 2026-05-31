@@ -55,6 +55,35 @@ def get_scene_generator():
             _scene_generator.knowledge_manager = npc_mgr.knowledge_manager
     return _scene_generator
 
+def _fit_tfidf_on_knowledge():
+    """用知识库文件内容拟合 TF-IDF 嵌入模型"""
+    import os as _os
+    if _os.environ.get("EMBED_MODEL_TYPE", "").strip() != "tfidf":
+        return
+    from hello_agents.memory.embedding import get_text_embedder
+    knowledge_dir = _os.path.join(_os.path.dirname(__file__), 'knowledge')
+    texts = []
+    if _os.path.isdir(knowledge_dir):
+        for root, dirs, fnames in _os.walk(knowledge_dir):
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            for fname in sorted(fnames):
+                if fname.startswith("."):
+                    continue
+                fpath = _os.path.join(root, fname)
+                try:
+                    with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read()[:5000]  # 每个文件取前 5000 字符
+                        if content.strip():
+                            texts.append(content)
+                except Exception:
+                    pass
+    if not texts:
+        texts = ["办公室 同事 技术 开发 产品 设计"]
+    print(f"🧠 TF-IDF 拟合中 (语料: {len(texts)} 个文件)...")
+    embedder = get_text_embedder()
+    embedder.fit(texts)
+    print(f"✅ TF-IDF 拟合完成, 向量维度: {embedder.dimension}")
+
 # 生命周期管理
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -66,6 +95,9 @@ async def lifespan(app: FastAPI):
     
     # 验证配置
     settings.validate()
+
+    # TF-IDF 嵌入：从知识库文件收集训练语料，Agent 创建前完成拟合
+    _fit_tfidf_on_knowledge()
 
     # 初始化NPC管理器
     npc_manager = get_npc_manager()
@@ -266,8 +298,7 @@ async def ack_pending_messages(req: AckPendingRequest = None):
     if not thinker:
         return {"ack": False}
     npc_name = req.npc_name if req else None
-    message_keys = req.message_keys if req else None
-    thinker.ack_pending(npc_name, message_keys)
+    thinker.ack_pending(npc_name)
     return {"ack": True}
 
 @app.post("/npc/{npc_name}/initiate")
