@@ -6,8 +6,8 @@
 .env.local
 .env
 .env.example
-backend/.env.local
 backend/.env
+backend/.env.example
 
 # Node.js
 node_modules/
