@@ -35,7 +35,7 @@ app.use('/health', healthRouter(BACKEND_URL));
 // API 代理 → FastAPI
 app.use('/api', apiProxyRouter(BACKEND_URL));
 
-// 生产环境：托管 React 构建产物
+// 生产环境：托管前端静态文件
 const staticDir = path.join(__dirname, '..', 'frontend');
 app.use(express.static(staticDir));
 

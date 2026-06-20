@@ -20,8 +20,6 @@ class AutonomousThinker:
         self.npc_manager = npc_manager
         self.timeline_manager = timeline_manager
         self.llm = llm
-        self.scene_generator = None  # 由 state_manager 注入
-
         # 每个 NPC 的上次互动时间
         self.last_interactions: Dict[str, datetime] = {}
 

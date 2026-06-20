@@ -22,8 +22,6 @@ class GroupChatEngine:
         self.npc_manager = npc_manager
         self.timeline_manager = timeline_manager
         self.llm = llm
-        self.scene_generator = None  # 由 state_manager 注入
-
         # ✅ 最近一场抢话的完整记录（用于连续性上下文）
         self._last_contention: Optional[List[dict]] = None
 

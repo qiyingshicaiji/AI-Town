@@ -240,6 +240,7 @@ class NPCAgentManager:
         self.agents: Dict[str, SimpleAgent] = {}
         self.memories: Dict[str, MemoryManager] = {}
         self.relationship_manager: Optional[RelationshipManager] = None
+        self.knowledge_manager = None  # 由 startup 注入（KnowledgeManager 封装 RAGTool）
 
         self.npc_states: Dict[str, dict] = {}
         self._state_lock = threading.Lock()

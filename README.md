@@ -1,6 +1,6 @@
 # AI-Town 多智能体 NPC 社交模拟系统
 
-AI-Town 是基于 HelloAgents 框架的多智能体社交模拟平台，支持复杂的 NPC 角色建模、记忆管理、情感演化和自主行为。项目采用前后端分离架构，后端基于 FastAPI，前端为原生 HTML/JS，支持一键 Docker Compose 启动。
+AI-Town 是基于 HelloAgents 框架的多智能体社交模拟平台，支持复杂的 NPC 角色建模、记忆管理、情感演化和自主行为。项目采用前后端分离架构，后端基于 FastAPI，前端为 Vue 3（CDN 全局构建）+ 原生 JS 模块，支持一键 Docker Compose 启动。
 
 ## 核心特性
 
@@ -52,9 +52,15 @@ NPC 通过三个通道观察世界，不再只依赖群聊上下文认识彼此�
 - **NPC 间对话观察**：未参与对话的 NPC 作为旁观者记录感知
 - **新同事入职通知**：创建新 NPC 时自动向所有现有 NPC 注入感知记忆
 
-### 场景生成器
+### 统一对话流（自动多轮）
 
-一次 LLM 调用生成完整多人对话场景，支持 1v1 聊天、群聊、NPC 间对话、NPC 主动消息四种模式。相比逐 NPC 调用，大幅降低 API 成本。
+所有 NPC 对话统一走 `generate_npc_speech()`（单次发言生成 + 三维度去重 + 自动记忆写入），通过 `generate_conversation_flow()` 包装实现自动多轮循环：
+
+- **1v1**：NPC 连续回复多轮，自然展开对话
+- **群聊**：启发式评分竞争发言权，得分最高者抢话，直到没人想发言或达上限
+- **NPC 间**：两个 NPC 交替发言，记忆系统驱动话题连续性
+
+相比旧的批量场景生成，统一架构保留了实时动态性（用户可随时打断插话），消除了代码冗余。
 
 ### 知识库 RAG 与反幻觉机制
 
@@ -93,9 +99,8 @@ NPC 通过三个通道观察世界，不再只依赖群聊上下文认识彼此�
 AI-Town/
 ├── backend/
 │   ├── main.py                  # FastAPI 应用 & 全部 API 路由
-│   ├── agents.py                # NPC Agent 管理、CRUD、核心对话流程、防重复发言
+│   ├── agents.py                # NPC Agent 管理、CRUD、统一对话流、防重复发言、记忆写入
 │   ├── relationship_manager.py  # 好感度系统（玩家 & NPC 间）
-│   ├── scene_generator.py       # 统一场景生成引擎（含同事名册注入、防编造规则）
 │   ├── knowledge_manager.py     # 知识库 RAG 管理器（基于 hello_agents RAGTool）
 │   ├── state_manager.py         # 后台定时循环调度 + 暂停控制
 │   ├── autonomous_thinker.py    # NPC 主动发起对话引擎
@@ -118,19 +123,29 @@ AI-Town/
 │   ├── src/routes/api.ts        # /api/* → FastAPI 代理（含 SSE 流式穿透）
 │   ├── src/routes/health.ts     # 聚合健康检查
 │   └── src/middleware/          # helmet + CORS + 限流 + 日志
-├── frontend/                    # React + TypeScript + Vite 前端
-│   ├── src/
-│   │   ├── App.tsx              # 应用根组件
-│   │   ├── main.tsx             # 入口
-│   │   ├── api/client.ts        # API 客户端
-│   │   ├── components/ui/       # 通用 UI 组件（Modal, Toast, Button 等）
-│   │   ├── components/business/ # 业务组件（ChatInput, ConvList, NpcCard 等）
-│   │   ├── features/            # 功能模块（chat, wizard, npc-manager, god-panel）
-│   │   ├── hooks/               # 自定义 hooks（useSSE, usePolling, useApi）
-│   │   ├── stores/              # Zustand 状态管理
-│   │   └── types/               # TypeScript 类型定义
-│   ├── vite.config.ts
-│   └── tsconfig.json
+├── frontend/                    # Vue 3（CDN 全局构建）+ 原生 JS 前端
+│   ├── index.html               # 入口 HTML
+│   ├── css/style.css            # 全局样式
+│   └── js/
+│       ├── app.js               # Vue 应用入口
+│       ├── api.js               # API 客户端
+│       ├── storage.js           # 本地存储封装
+│       ├── vue.global.prod.js   # Vue 3 生产环境 CDN 构建
+│       ├── components/          # Vue 组件
+│       │   ├── AppShell.js      # 应用外壳（三栏布局）
+│       │   ├── ChatArea.js      # 聊天消息区（SSE 流式渲染）
+│       │   ├── ConvList.js      # 对话列表
+│       │   ├── GodPanel.js      # 上帝面板（时间线/事件）
+│       │   ├── Modals.js        # 模态框集合
+│       │   ├── NpcManager.js    # NPC 管理面板
+│       │   ├── NpcWizard.js     # NPC 创建向导
+│       │   ├── Toast.js         # Toast 通知组件
+│       │   ├── toastBus.js      # Toast 事件总线
+│       │   └── TopBar.js        # 顶栏
+│       └── stores/              # Vue 响应式 stores
+│           ├── appStore.js      # 应用全局状态
+│           ├── npcStore.js      # NPC 列表/状态
+│           └── timelineStore.js # 时间线状态
 ├── docker-compose.yml           # Docker 编排（backend + BFF + 可选 Qdrant/Neo4j）
 ├── Dockerfile.backend           # 后端镜像（Python 3.11）
 ├── Dockerfile.bff               # BFF 镜像（Node 20 Alpine）
@@ -157,27 +172,27 @@ asyncio 事件循环
 
 ## 对话架构
 
-### 用户 → NPC 对话流程
+### 用户 → NPC 对话流程（自动多轮）
 
 ```
 前端 sendMessage()
   → POST /chat/scene (SSE)
-    → SceneGenerator.generate_scene()
-      → _build_roles_text()          # 角色档案（嵌入同事名册）
-      → _build_history_text()        # 历史 + 跨场景记忆检索
-      → LoreManager.query()          # 知识库 RAG（用户消息触发）
-      → _generate_fact()             # 低温事实提取（如有RAG结果）
-      → LLM 生成 JSON 对话           # 高温角色演绎
-      → _save_scene_to_memory()      # 记忆持久化
-      → record_npc_speech()          # 统一记忆写入入口
-    ← SSE 流式返回 [{speaker, content}, ...]
+    → generate_conversation_flow()
+      → _retrieve_knowledge()        # RAG 知识检索（用户消息触发）
+      → 循环每轮：
+        → 评分选发言人（群聊用 GroupChatEngine._score_npc 抢话）
+        → generate_npc_speech()      # 统一发言生成
+          → 人格上下文 + 同事名册 + 记忆检索 + 防重复
+          → record_npc_speech()      # 自动写入自己 + 听众记忆
+      → SSE 逐条推送 [{speaker, content}, ...]
+      → 事后：好感度分析 + 感知引擎观察 + 自主思考记录
 ```
 
 ### NPC 间对话 / 主动搭话 / 群聊抢话流程
 
 ```
 后台循环触发
-  → NPCAgentManager.generate_npc_speech()
+  → generate_conversation_flow() 或 generate_npc_speech()
     → 人格上下文 + 同事名册 + 记忆检索 + 防重复
     → 防重复检测（三维度）→ 重复则 retry with topic seeds
     → record_npc_speech() → 写入自己 + 听众记忆
@@ -191,7 +206,7 @@ asyncio 事件循环
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | `/chat` | 1v1 NPC 对话 |
-| POST | `/chat/scene` | 场景化对话（SSE 流式，含好感度分析） |
+| POST | `/chat/scene` | 统一对话（SSE 流式自动多轮，含好感度分析） |
 | POST | `/group-chat` | 群聊 |
 | POST | `/group-chat/contention` | 群聊抢话（全量） |
 | POST | `/group-chat/contention/stream` | 群聊抢话（SSE 流式） |
@@ -264,7 +279,7 @@ asyncio 事件循环
 
 ## 前端架构
 
-React + TypeScript + Vite，Zustand 状态管理，SSE 流式对话渲染。
+Vue 3（CDN 全局构建）+ 原生 JS 模块，Vue 响应式 stores，SSE 流式对话渲染。
 
 ### 布局示意
 
@@ -355,7 +370,7 @@ docker compose down
 | 服务 | 端口 | 说明 |
 |------|------|------|
 | Backend | 8000 | FastAPI + 文档 `/docs` |
-| BFF | 8090 | Express + React 静态文件 + API 代理 |
+| BFF | 8090 | Express + 前端静态文件 + API 代理 |
 | Qdrant（可选） | 6333/6334 | 本地向量数据库，`--profile local` |
 | Neo4j（可选） | 7474/7687 | 本地图数据库，`--profile local` |
 
@@ -381,6 +396,6 @@ docker compose down
 | 记忆存储 | SQLite（权威存储） + Qdrant（向量检索） |
 | 嵌入模型 | 智谱 embedding-2（OpenAI 兼容 REST）→ local → TF-IDF |
 | BFF | Express + TypeScript（helmet + CORS + 限流 + API 代理） |
-| 前端 | React + TypeScript + Vite，Zustand 状态管理，SSE 流式 |
+| 前端 | Vue 3（CDN 全局构建）+ 原生 JS，响应式 stores，SSE 流式 |
 | 异步 | asyncio 后台任务调度 |
 | 容器化 | Docker Compose，健康检查，卷挂载持久化 |

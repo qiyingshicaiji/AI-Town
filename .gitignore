@@ -5,6 +5,7 @@
 # 敏感配置 (包含真实密钥)
 .env.local
 .env
+.env.example
 backend/.env.local
 backend/.env
 

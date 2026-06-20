@@ -87,8 +87,6 @@ class NPCNPCChatEngine:
         self.npc_manager = npc_manager
         self.timeline_manager = timeline_manager
         self.llm = llm
-        self.scene_generator = None  # 由 state_manager 注入
-
         # 冷却追踪: {(npc_a, npc_b): datetime}
         self.cooldowns: Dict[tuple, datetime] = {}
 
@@ -318,33 +316,29 @@ class NPCNPCChatEngine:
         return chat_id
 
     async def _generate_conversation(self, npc_a: str, npc_b: str) -> List[dict]:
-        """生成 NPC 间对话（优先用场景生成器）"""
+        """生成 NPC 间对话（统一走 generate_conversation_flow）"""
         self.daily_call_count += 1
 
-        # 构建「最近已聊过」上下文 — 供 LLM 避开重复话题
+        # 构建「最近已聊过」上下文
         recent_context = self._build_recent_chat_context(npc_a, npc_b)
 
         messages = []
 
-        # 优先使用场景生成器
-        if self.scene_generator:
+        # 优先使用统一多轮流（内部走 generate_npc_speech，自带去重和记忆写入）
+        if hasattr(self.npc_manager, 'generate_conversation_flow'):
             try:
-                scene = await self.scene_generator.generate_scene(
+                messages = await self.npc_manager.generate_conversation_flow(
                     npc_names=[npc_a, npc_b],
                     trigger_message="",
-                    max_messages=6,
-                    is_npc_npc=True,
-                    extra_context=recent_context,
+                    max_rounds=self.MAX_ROUNDS,
                 )
-                if scene:
-                    content_str = "|".join(m.get("content", "") for m in scene)
+                if messages:
+                    content_str = "|".join(m.get("content", "") for m in messages)
                     if self._would_be_duplicate(npc_a, npc_b, content_str):
                         print(f"  🚫 内容去重拦截 [{npc_a}↔{npc_b}]: 与最近对话高度相似")
                         messages = self._generate_fallback(npc_a, npc_b, "", recent_context)
-                    else:
-                        messages = scene
             except Exception as e:
-                print(f"⚠️ 场景生成器NPC对话失败: {e}")
+                print(f"⚠️ generate_conversation_flow NPC对话失败: {e}")
 
         # 回退到独立 LLM
         if not messages:
@@ -498,7 +492,6 @@ class NPCNPCChatEngine:
                 messages = self._generate_fallback(npc_a, npc_b, event_context, recent_context)
                 content_str = "|".join(m.get("content", "") for m in messages)
 
-            # ✅ 記憶寫入由 scene_generator._save_scene_to_memory 統一處理
             return messages
 
         except Exception as e:
@@ -568,7 +561,6 @@ class NPCNPCChatEngine:
             messages.append({"speaker": npc_b, "content": msg_b})
 
         content_str = "|".join(m.get("content", "") for m in messages)
-        # ✅ 記憶寫入由 scene_generator._save_scene_to_memory 統一處理
         return messages
 
     # _jaccard_similarity 已移至 NPCAgentManager（agents.py），此處改用 self.npc_manager._jaccard_similarity()

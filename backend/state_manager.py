@@ -5,7 +5,6 @@ from typing import Optional
 from npc_npc_chat import NPCNPCChatEngine
 from autonomous_thinker import AutonomousThinker
 from group_chat_engine import GroupChatEngine
-from scene_generator import SceneGenerator
 from agents import get_npc_manager
 from timeline_manager import get_timeline_manager
 from perception_engine import PerceptionEngine
@@ -32,28 +31,20 @@ class NPCStateManager:
         tm_mgr = get_timeline_manager()
         llm = npc_mgr.llm if npc_mgr.llm else None
 
-        # 场景生成器（核心，被其他引擎共用）
-        self.scene_generator = SceneGenerator(
-            npc_manager=npc_mgr, timeline_manager=tm_mgr, llm=llm
-        )
-
-        # NPC 间聊天引擎（使用场景生成器）
+        # NPC 间聊天引擎
         self.npc_chat_engine = NPCNPCChatEngine(
             npc_manager=npc_mgr, timeline_manager=tm_mgr, llm=llm
         )
-        self.npc_chat_engine.scene_generator = self.scene_generator
 
-        # 自主思考引擎（使用场景生成器）
+        # 自主思考引擎
         self.autonomous_thinker = AutonomousThinker(
             npc_manager=npc_mgr, timeline_manager=tm_mgr, llm=llm
         )
-        self.autonomous_thinker.scene_generator = self.scene_generator
 
         # 群聊抢话引擎
         self.group_chat_engine = GroupChatEngine(
             npc_manager=npc_mgr, timeline_manager=tm_mgr, llm=llm
         )
-        self.group_chat_engine.scene_generator = self.scene_generator
 
         # 感知引擎
         self.perception_engine = PerceptionEngine(
@@ -86,7 +77,7 @@ class NPCStateManager:
     def is_paused(self) -> bool:
         """查询暂停状态"""
         return self._paused
-    
+
     async def start(self):
         """启动后台更新任务"""
         if self._running:
@@ -145,7 +136,7 @@ class NPCStateManager:
                 break
             except Exception as e:
                 print(f"❌ NPC聊天检查失败: {e}")
-    
+
     async def _think_loop(self):
         """NPC 自主思考循环"""
         think_interval = 15  # Phase 4: 45→15秒
@@ -183,4 +174,3 @@ def get_state_manager(update_interval: int = 30) -> NPCStateManager:
     if _state_manager is None:
         _state_manager = NPCStateManager(update_interval)
     return _state_manager
-

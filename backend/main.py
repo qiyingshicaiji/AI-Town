@@ -35,25 +35,7 @@ from models import (
 from agents import get_npc_manager
 from state_manager import get_state_manager
 from timeline_manager import get_timeline_manager
-from scene_generator import SceneGenerator
 from knowledge_manager import KnowledgeManager
-
-# 全局场景生成器
-_scene_generator = None
-
-def get_scene_generator():
-    global _scene_generator
-    if _scene_generator is None:
-        npc_mgr = get_npc_manager()
-        tm_mgr = get_timeline_manager()
-        _scene_generator = SceneGenerator(
-            npc_manager=npc_mgr,
-            timeline_manager=tm_mgr,
-            llm=npc_mgr.llm if npc_mgr.llm else None
-        )
-        if hasattr(npc_mgr, 'knowledge_manager') and npc_mgr.knowledge_manager:
-            _scene_generator.knowledge_manager = npc_mgr.knowledge_manager
-    return _scene_generator
 
 def _fit_tfidf_on_knowledge():
     """用知识库文件内容拟合 TF-IDF 嵌入模型"""
@@ -115,8 +97,6 @@ async def lifespan(app: FastAPI):
     try:
         knowledge_dir = os.path.join(os.path.dirname(__file__), 'knowledge')
         knowledge_manager = KnowledgeManager(knowledge_dir)
-        if getattr(state_manager, 'scene_generator', None):
-            state_manager.scene_generator.knowledge_manager = knowledge_manager
         npc_manager.knowledge_manager = knowledge_manager
     except Exception as e:
         import traceback
@@ -847,34 +827,32 @@ class SceneRequest(BaseModel):
 
 @app.post("/chat/scene")
 async def chat_scene(request: SceneRequest):
-    """统一场景生成 + SSE 流式返回
+    """统一对话生成 + SSE 流式返回（基于 generate_npc_speech 的自动多轮）
 
     支持: 1v1聊天 / 群聊 / NPC间对话
     """
     npc_mgr, _, _ = get_managers()
-    scene_gen = get_scene_generator()
+    state_mgr = get_state_manager()
 
     for name in request.npc_names:
         if not npc_mgr.get_npc_info(name):
             raise HTTPException(status_code=404, detail=f"NPC '{name}' 不存在")
 
-    # 获取好感度
-    affinities = {}
-    if npc_mgr.relationship_manager:
-        for name in request.npc_names:
-            affinities[name] = npc_mgr.relationship_manager.get_affinity(name)
-
     is_group = len(request.npc_names) > 1
     player_message = request.message or ""
 
+    # 构建评分器：群聊用抢话评分，1v1 不传（唯一 NPC 自动发言）
+    scorer = None
+    if is_group and state_mgr.group_chat_engine:
+        scorer = state_mgr.group_chat_engine._score_npc
+
     async def generate():
-        scene = await scene_gen.generate_scene(
+        scene = await npc_mgr.generate_conversation_flow(
             npc_names=request.npc_names,
             trigger_message=player_message,
             history=request.history,
-            affinity_context=affinities,
-            max_messages=10 if is_group else 4,
-            is_group=is_group,
+            max_rounds=8 if is_group else 3,
+            speaker_scorer=scorer,
         )
         for msg in scene:
             yield f"data: {json.dumps(msg, ensure_ascii=False)}\n\n"
@@ -884,7 +862,6 @@ async def chat_scene(request: SceneRequest):
         affinity_updates = {}
         if player_message and npc_mgr.relationship_manager:
             for name in request.npc_names:
-                # 收集该NPC在场景中的回复
                 npc_texts = [m.get("content", "") for m in scene if m.get("speaker") == name]
                 npc_response = " ".join(npc_texts) if npc_texts else ""
                 if not npc_response:
@@ -914,7 +891,6 @@ async def chat_scene(request: SceneRequest):
                     pass
 
         # 自主思考引擎：记录互动时间
-        state_mgr = get_state_manager()
         if getattr(state_mgr, 'autonomous_thinker', None):
             for name in request.npc_names:
                 try:
